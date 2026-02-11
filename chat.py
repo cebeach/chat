@@ -13,6 +13,7 @@ from ui import (
     console,
     display_assistant_stream,
     display_config,
+    display_conversation_info,
     display_conversations,
     display_error,
     display_info,
@@ -24,6 +25,7 @@ from ui import (
     print_help,
     print_welcome,
     save_readline_history,
+    set_conversations_dir,
 )
 
 
@@ -45,7 +47,7 @@ def parse_args(config):
 
 def handle_command(cmd, args, client, conversation, state):
     """Handle a slash command. Returns True if the REPL should continue."""
-    if cmd == "/help":
+    if cmd == "/?":
         print_help()
 
     elif cmd == "/exit":
@@ -77,7 +79,7 @@ def handle_command(cmd, args, client, conversation, state):
             display_info(f"Current system prompt: {current}")
         else:
             conversation.system_prompt = args
-            display_info(f"System prompt set.")
+            display_info("System prompt set.")
 
     elif cmd == "/save":
         name = args.strip() or None
@@ -122,8 +124,11 @@ def handle_command(cmd, args, client, conversation, state):
     elif cmd == "/config":
         display_config(state["config"], state["model"])
 
+    elif cmd == "/info":
+        display_conversation_info(conversation.summary(), state.get("last_stats"))
+
     else:
-        display_error(f"Unknown command: {cmd}. Type /help for available commands.")
+        display_error(f"Unknown command: {cmd}. Type /? for available commands.")
 
     return True
 
@@ -158,17 +163,13 @@ def main():
     conversation = Conversation(system_prompt=config["system_prompt"])
 
     init_readline()
+    set_conversations_dir(config["conversations_dir"])
     print_welcome(model)
 
     # Main REPL
     try:
         while True:
-            try:
-                user_input = get_user_input()
-            except KeyboardInterrupt:
-                console.print()
-                display_info("Goodbye!")
-                break
+            user_input = get_user_input()
 
             if user_input is None:  # EOF
                 console.print()
@@ -205,6 +206,7 @@ def main():
                 )
                 response = display_assistant_stream(chat_stream)
                 conversation.add_assistant(response)
+                state["last_stats"] = chat_stream.stats
                 if state["show_stats"]:
                     display_stats(chat_stream.stats)
             except KeyboardInterrupt:
