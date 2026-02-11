@@ -14,11 +14,14 @@ A Python chat application that provides a terminal-based interface for chatting 
 - `requests` — HTTP client for the Ollama API
 - `rich` — Terminal formatting and streaming output
 
-## Phase 2 Roadmap
+## Features
 
-1. Config file (`~/.config/chat/config.toml`)
-2. Save/load conversations (JSON persistence)
-3. Input history (readline)
-4. Markdown rendering
-5. Token/context stats
-6. Multiline input
+- **Config file** — TOML configuration at `~/.config/chat/config.toml`
+- **Save/load conversations** — JSON persistence with tab-completion of saved names
+- **Input history** — Readline-based history persisted to disk
+- **Markdown rendering** — Streamed responses re-rendered as Rich Markdown
+- **Word-wrap streaming** — Streamed output wraps at word boundaries instead of breaking mid-word
+- **Token/context stats** — Toggle display of tokens/sec and prompt token counts
+- **Conversation info** — `/info` command showing message, word, character, and token counts
+- **Tab-completion** — Slash commands and `/load` conversation names
+- **Multiline input** — `"""` delimiters for multi-line prompts
