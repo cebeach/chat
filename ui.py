@@ -7,8 +7,34 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.theme import Theme
 
+from conversation import Conversation
+
 HISTORY_FILE = Path.home() / ".local" / "share" / "chat" / "history"
 HISTORY_MAX = 1000
+
+COMMANDS = [
+    "/?",
+    "/clear",
+    "/config",
+    "/conversations",
+    "/exit",
+    "/info",
+    "/load",
+    "/model",
+    "/models",
+    "/save",
+    "/stats",
+    "/system",
+]
+
+_conversations_dir = ""
+
+
+def set_conversations_dir(path):
+    """Set the conversations directory for tab-completion of /load."""
+    global _conversations_dir
+    _conversations_dir = path
+
 
 theme = Theme(
     {
@@ -41,9 +67,10 @@ def print_help():
     table.add_row("/models", "List available models")
     table.add_row("/model <name>", "Switch to a different model")
     table.add_row("/system <prompt>", "Set the system prompt")
-    table.add_row("/save [name]", "Save conversation (default: timestamp)")
+    table.add_row("/save <name>", "Save conversation (default: timestamp)")
     table.add_row("/load <name>", "Load a saved conversation")
     table.add_row("/conversations", "List saved conversations")
+    table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/config", "Show current configuration")
     table.add_row('"""', "Enter multiline input mode")
@@ -84,6 +111,20 @@ def display_config(config, current_model):
     console.print(table)
 
 
+def display_conversation_info(summary, last_stats=None):
+    table = Table(title="Conversation Info", show_header=True, header_style="bold")
+    table.add_column("Statistic", style="bold cyan")
+    table.add_column("Value")
+    user = summary["user_messages"]
+    asst = summary["assistant_messages"]
+    table.add_row("Messages", f"{summary['messages']} ({user} you, {asst} AI)")
+    table.add_row("Words", f"{summary['words']:,}")
+    table.add_row("Characters", f"{summary['characters']:,}")
+    if last_stats and "prompt_eval_count" in last_stats:
+        table.add_row("Prompt tokens", f"{last_stats['prompt_eval_count']:,}")
+    console.print(table)
+
+
 def display_info(msg):
     console.print(f"[info]{msg}[/info]")
 
@@ -99,30 +140,64 @@ def display_assistant_stream(token_generator):
     """
     console.print("[assistant_label]Assistant:[/assistant_label]")
     full_text = ""
+    term_width = console.width or 80
+    col = 0  # current column position
+    word_buf = ""  # incomplete word being accumulated
+    visual_lines = 0  # lines emitted (for erasure)
+
+    def _flush_word(word):
+        """Write a complete word, wrapping to next line if needed."""
+        nonlocal col, visual_lines
+        if col + len(word) > term_width and col > 0:
+            sys.stdout.write("\n")
+            visual_lines += 1
+            col = 0
+        sys.stdout.write(word)
+        col += len(word)
+
     try:
         for token in token_generator:
-            sys.stdout.write(token)
-            sys.stdout.flush()
             full_text += token
+            word_buf += token
+
+            # Process explicit newlines first
+            while "\n" in word_buf:
+                before, _, word_buf = word_buf.partition("\n")
+                if before:
+                    _flush_word(before)
+                sys.stdout.write("\n")
+                visual_lines += 1
+                col = 0
+
+            # Flush complete words (delimited by spaces)
+            while " " in word_buf:
+                word, _, word_buf = word_buf.partition(" ")
+                _flush_word(word)
+                # Write the space (wrap first if at edge)
+                if col >= term_width:
+                    sys.stdout.write("\n")
+                    visual_lines += 1
+                    col = 0
+                sys.stdout.write(" ")
+                col += 1
+
+            sys.stdout.flush()
+
+        # Flush any remaining partial word
+        if word_buf:
+            _flush_word(word_buf)
+            sys.stdout.flush()
     except KeyboardInterrupt:
         full_text += " [interrupted]"
     finally:
+        # Account for the last line if it has content
+        if col > 0:
+            visual_lines += 1
+
         # Clear the raw streamed output and re-render as markdown.
-        # Use \r to return to column 0, then erase from cursor to end of
-        # screen — this avoids fragile per-line counting that breaks when
-        # lines wrap differently than expected.
         sys.stdout.write("\r")
-        # Move cursor up to the line just after "Assistant:"
-        term_width = console.width or 80
-        visual_lines = 0
-        for line in full_text.split("\n"):
-            if not line:
-                visual_lines += 1
-            else:
-                visual_lines += (len(line) + term_width - 1) // term_width
         for _ in range(visual_lines):
             sys.stdout.write("\033[A")
-        # Erase from cursor to end of screen
         sys.stdout.write("\033[J")
         sys.stdout.flush()
         console.print(Markdown(full_text))
@@ -145,14 +220,32 @@ def display_stats(stats):
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 
 
+def _command_completer(text, state):
+    """Readline completer for slash commands and /load arguments."""
+    line = readline.get_line_buffer().lstrip()
+    if line.startswith("/load ") and _conversations_dir:
+        names = [n for n, _ in Conversation.list_saved(_conversations_dir)]
+        matches = [n for n in names if n.startswith(text)]
+    elif text.startswith("/"):
+        matches = [c for c in COMMANDS if c.startswith(text)]
+    else:
+        matches = []
+    if state < len(matches):
+        return matches[state]
+    return None
+
+
 def init_readline():
-    """Load readline history from disk."""
+    """Load readline history from disk and configure tab-completion."""
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         readline.read_history_file(HISTORY_FILE)
     except FileNotFoundError:
         pass
     readline.set_history_length(HISTORY_MAX)
+    readline.set_completer(_command_completer)
+    readline.set_completer_delims(" ")
+    readline.parse_and_bind("tab: complete")
 
 
 def save_readline_history():
@@ -212,10 +305,13 @@ def get_user_input():
             return ""
 
         # Stuff the first character into readline's input buffer
-        # so it appears as part of the editable line
-        try:
-            readline.stuff_char(ord(ch))
-        except AttributeError:
+        # so it appears as part of the editable line.
+        # stuff_char exists at runtime in CPython but is not in the
+        # type stubs, so use hasattr + getattr to avoid type errors.
+        _stuff_char = getattr(readline, "stuff_char", None)
+        if _stuff_char is not None:
+            _stuff_char(ord(ch))
+        else:
             # Fallback: use pre_input_hook to insert the character
             def insert_char():
                 readline.insert_text(ch)
