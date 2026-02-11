@@ -291,7 +291,7 @@ def get_user_input():
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
         # Erase the entire prompt + placeholder line, reposition cursor
-        sys.stdout.write(f"\r\033[K")
+        sys.stdout.write("\r\033[K")
         sys.stdout.flush()
 
         if ch == "\x03":  # Ctrl-C

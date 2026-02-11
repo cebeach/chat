@@ -79,7 +79,7 @@ def handle_command(cmd, args, client, conversation, state):
             display_info(f"Current system prompt: {current}")
         else:
             conversation.system_prompt = args
-            display_info(f"System prompt set.")
+            display_info("System prompt set.")
 
     elif cmd == "/save":
         name = args.strip() or None
