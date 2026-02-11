@@ -27,7 +27,7 @@ def print_welcome(model):
     console.print()
     console.print("[bold]AI Chat[/bold] (Ollama)", style="info")
     console.print(f"Model: [bold]{model}[/bold]")
-    console.print("Type [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit.")
+    console.print("Type [bold]/?[/bold] for commands, [bold]/exit[/bold] to quit.")
     console.print()
 
 
@@ -107,11 +107,23 @@ def display_assistant_stream(token_generator):
     except KeyboardInterrupt:
         full_text += " [interrupted]"
     finally:
-        # Clear the raw streamed output and re-render as markdown
-        # Move cursor up and clear each line we printed
-        raw_lines = full_text.count("\n") + 1
-        for _ in range(raw_lines):
-            sys.stdout.write("\033[A\033[2K")
+        # Clear the raw streamed output and re-render as markdown.
+        # Use \r to return to column 0, then erase from cursor to end of
+        # screen — this avoids fragile per-line counting that breaks when
+        # lines wrap differently than expected.
+        sys.stdout.write("\r")
+        # Move cursor up to the line just after "Assistant:"
+        term_width = console.width or 80
+        visual_lines = 0
+        for line in full_text.split("\n"):
+            if not line:
+                visual_lines += 1
+            else:
+                visual_lines += (len(line) + term_width - 1) // term_width
+        for _ in range(visual_lines):
+            sys.stdout.write("\033[A")
+        # Erase from cursor to end of screen
+        sys.stdout.write("\033[J")
         sys.stdout.flush()
         console.print(Markdown(full_text))
 
@@ -152,12 +164,73 @@ def save_readline_history():
 
 
 def get_user_input():
-    """Prompt the user for input. Returns None on EOF."""
-    try:
-        console.print("[user_label]You:[/user_label]", end=" ")
-        return input()
-    except EOFError:
-        return None
+    """Prompt the user for input with ollama-style placeholder.
+
+    Shows: >>> Send a message (/? for help)
+    Placeholder is grey and disappears as soon as the user types.
+    Ctrl-C clears the current line and re-prompts.
+    Returns None on EOF (Ctrl-D).
+    """
+    import termios
+    import tty
+
+    PROMPT = ">>> "
+    PLACEHOLDER = "Send a message (/? for help)"
+
+    # Readline prompt: bold green >>>, with ANSI codes wrapped in \x01/\x02
+    # so readline correctly calculates visible width.
+    rl_prompt = f"\x01\033[1;32m\x02{PROMPT}\x01\033[0m\x02"
+
+    while True:
+        # Print prompt and placeholder
+        sys.stdout.write(f"\033[1;32m{PROMPT}\033[0m")
+        sys.stdout.write(f"\033[90m{PLACEHOLDER}\033[0m")
+        sys.stdout.write(f"\033[{len(PLACEHOLDER)}D")
+        sys.stdout.flush()
+
+        # Read one character in raw mode to detect first keystroke
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        # Erase the entire prompt + placeholder line, reposition cursor
+        sys.stdout.write(f"\r\033[K")
+        sys.stdout.flush()
+
+        if ch == "\x03":  # Ctrl-C
+            print()
+            continue
+        if ch == "\x04":  # Ctrl-D
+            print()
+            return None
+        if ch == "\r" or ch == "\n":  # Enter with no input
+            print()
+            return ""
+
+        # Stuff the first character into readline's input buffer
+        # so it appears as part of the editable line
+        try:
+            readline.stuff_char(ord(ch))
+        except AttributeError:
+            # Fallback: use pre_input_hook to insert the character
+            def insert_char():
+                readline.insert_text(ch)
+                readline.redisplay()
+                readline.set_pre_input_hook(None)
+
+            readline.set_pre_input_hook(insert_char)
+
+        try:
+            return input(rl_prompt)
+        except KeyboardInterrupt:
+            print()
+            continue
+        except EOFError:
+            return None
 
 
 def get_multiline_input():

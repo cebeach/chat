@@ -45,7 +45,7 @@ def parse_args(config):
 
 def handle_command(cmd, args, client, conversation, state):
     """Handle a slash command. Returns True if the REPL should continue."""
-    if cmd == "/help":
+    if cmd == "/?":
         print_help()
 
     elif cmd == "/exit":
@@ -123,7 +123,7 @@ def handle_command(cmd, args, client, conversation, state):
         display_config(state["config"], state["model"])
 
     else:
-        display_error(f"Unknown command: {cmd}. Type /help for available commands.")
+        display_error(f"Unknown command: {cmd}. Type /? for available commands.")
 
     return True
 
@@ -163,12 +163,7 @@ def main():
     # Main REPL
     try:
         while True:
-            try:
-                user_input = get_user_input()
-            except KeyboardInterrupt:
-                console.print()
-                display_info("Goodbye!")
-                break
+            user_input = get_user_input()
 
             if user_input is None:  # EOF
                 console.print()
