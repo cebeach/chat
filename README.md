@@ -25,3 +25,6 @@ A Python chat application that provides a terminal-based interface for chatting 
 - **Conversation info** — `/info` command showing message, word, character, and token counts
 - **Tab-completion** — Slash commands and `/load` conversation names
 - **Multiline input** — `"""` delimiters for multi-line prompts
+
+---
+Built with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
