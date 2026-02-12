@@ -18,6 +18,10 @@ DEFAULTS = {
     "conversations_dir": str(
         Path.home() / ".local" / "share" / "chat" / "conversations"
     ),
+    "auto_save": True,
+    "seed": None,
+    "temperature": None,
+    "top_p": None,
 }
 
 

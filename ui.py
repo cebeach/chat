@@ -1,5 +1,6 @@
 import readline
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -14,6 +15,7 @@ HISTORY_MAX = 1000
 
 COMMANDS = [
     "/?",
+    "/cat",
     "/clear",
     "/config",
     "/conversations",
@@ -22,7 +24,10 @@ COMMANDS = [
     "/load",
     "/model",
     "/models",
+    "/recall",
+    "/retry",
     "/save",
+    "/set",
     "/stats",
     "/system",
 ]
@@ -63,13 +68,18 @@ def print_help():
     table.add_column("Description")
     table.add_row("/help", "Show this help message")
     table.add_row("/exit", "Quit the application")
+    table.add_row("/cat <name>", "Print a saved conversation to the console")
     table.add_row("/clear", "Clear conversation history")
     table.add_row("/models", "List available models")
     table.add_row("/model <name>", "Switch to a different model")
     table.add_row("/system <prompt>", "Set the system prompt")
+    table.add_row("/recall <n>", "Recall message pair n into context")
+    table.add_row("/retry", "Regenerate the last response")
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
     table.add_row("/load <name>", "Load a saved conversation")
     table.add_row("/conversations", "List saved conversations")
+    table.add_row("/set", "Show model options (seed, temperature, top_p)")
+    table.add_row("/set <key> <val>", "Set a model option (or 'default' to reset)")
     table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/config", "Show current configuration")
@@ -99,7 +109,14 @@ def display_conversations(conversations):
     console.print(table)
 
 
-def display_config(config, current_model):
+OLLAMA_DEFAULTS = {
+    "seed": 0,
+    "temperature": 0.8,
+    "top_p": 0.9,
+}
+
+
+def display_config(config, current_model, options=None):
     table = Table(title="Configuration", show_header=True, header_style="bold")
     table.add_column("Setting", style="bold cyan")
     table.add_column("Value")
@@ -108,7 +125,66 @@ def display_config(config, current_model):
     table.add_row("system_prompt", config["system_prompt"] or "(none)")
     table.add_row("ollama_url", config["ollama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])
+    if options is not None:
+        for key in sorted(options):
+            val = options[key]
+            if val is not None:
+                table.add_row(key, str(val))
+            else:
+                table.add_row(key, f"{OLLAMA_DEFAULTS[key]} [dim](default)[/dim]")
     console.print(table)
+
+
+def display_options(options):
+    """Display current model options in a table."""
+    table = Table(title="Model Options", show_header=True, header_style="bold")
+    table.add_column("Option", style="bold cyan")
+    table.add_column("Value")
+    for key in sorted(options):
+        val = options[key]
+        table.add_row(key, str(val) if val is not None else "(default)")
+    console.print(table)
+
+
+def _format_timestamp(iso_str):
+    """Format an ISO timestamp string for display."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return ""
+
+
+def display_cat_conversation(name, conversation, model):
+    """Print a saved conversation's messages to the console."""
+    console.print()
+    console.print(f"[bold]Conversation:[/bold] {name}")
+    if model:
+        console.print(f"[bold]Model:[/bold] {model}")
+    if conversation.system_prompt:
+        console.print(f"[bold]System prompt:[/bold] {conversation.system_prompt}")
+    console.print()
+
+    if not conversation.messages:
+        console.print("[dim]  (no messages)[/dim]")
+        return
+
+    pair_index = 0
+    for msg in conversation.messages:
+        ts = msg.get("timestamp", "")
+        ts_display = f"  [dim]{_format_timestamp(ts)}[/dim]" if ts else ""
+
+        if msg["role"] == "user":
+            pair_index += 1
+            console.print(
+                f"[dim]\\[{pair_index}][/dim] [user_label]You:[/user_label]{ts_display}"
+            )
+        else:
+            console.print(
+                f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]{ts_display}"
+            )
+        console.print(Markdown(msg["content"]))
+        console.print()
 
 
 def display_conversation_info(summary, last_stats=None):
@@ -205,6 +281,15 @@ def display_assistant_stream(token_generator):
     return full_text
 
 
+def display_context_warning(used, limit):
+    """Display a warning when context usage is high."""
+    pct = used / limit * 100
+    console.print(
+        f"[warning]Warning: context window {pct:.0f}% full "
+        f"({used:,} / {limit:,} tokens)[/warning]"
+    )
+
+
 def display_stats(stats):
     """Display token generation stats in a dim line."""
     if not stats:
@@ -223,7 +308,7 @@ def display_stats(stats):
 def _command_completer(text, state):
     """Readline completer for slash commands and /load arguments."""
     line = readline.get_line_buffer().lstrip()
-    if line.startswith("/load ") and _conversations_dir:
+    if (line.startswith("/load ") or line.startswith("/cat ")) and _conversations_dir:
         names = [n for n, _ in Conversation.list_saved(_conversations_dir)]
         matches = [n for n in names if n.startswith(text)]
     elif text.startswith("/"):

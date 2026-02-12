@@ -9,10 +9,22 @@ class Conversation:
         self.messages = []
 
     def add_user(self, content):
-        self.messages.append({"role": "user", "content": content})
+        self.messages.append(
+            {
+                "role": "user",
+                "content": content,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
     def add_assistant(self, content):
-        self.messages.append({"role": "assistant", "content": content})
+        self.messages.append(
+            {
+                "role": "assistant",
+                "content": content,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
     def clear(self):
         self.messages.clear()
@@ -29,6 +41,48 @@ class Conversation:
             "words": len(all_content.split()) if all_content.strip() else 0,
             "characters": sum(len(m["content"]) for m in self.messages),
         }
+
+    def get_pair(self, pair_index):
+        """Return the (user, assistant) message pair at the given 1-based index.
+
+        Raises:
+            IndexError: If the pair index is out of range.
+        """
+        user_msgs = [(i, m) for i, m in enumerate(self.messages) if m["role"] == "user"]
+        if pair_index < 1 or pair_index > len(user_msgs):
+            raise IndexError(f"Pair {pair_index} out of range (1-{len(user_msgs)})")
+        msg_idx = user_msgs[pair_index - 1][0]
+        user_msg = self.messages[msg_idx]
+        # The assistant response follows the user message
+        asst_msg = None
+        if msg_idx + 1 < len(self.messages):
+            candidate = self.messages[msg_idx + 1]
+            if candidate["role"] == "assistant":
+                asst_msg = candidate
+        return user_msg, asst_msg
+
+    def recall(self, pair_index):
+        """Re-inject a user+assistant pair into the end of the conversation.
+
+        Inserts a context note followed by the pair's messages at the end
+        of the message list so they fall within the model's context window.
+
+        Raises:
+            IndexError: If the pair index is out of range.
+        """
+        user_msg, asst_msg = self.get_pair(pair_index)
+        note = {
+            "role": "user",
+            "content": (
+                "[The following exchange is recalled from earlier "
+                "in the conversation for context]"
+            ),
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.messages.append(note)
+        self.messages.append({"role": "user", "content": user_msg["content"]})
+        if asst_msg:
+            self.messages.append({"role": "assistant", "content": asst_msg["content"]})
 
     def get_messages(self):
         """Return messages list with system prompt prepended if set."""
