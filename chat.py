@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+from datetime import datetime
 
 from requests.exceptions import ConnectionError, HTTPError
 
@@ -12,12 +13,15 @@ from ollama_client import OllamaClient
 from ui import (
     console,
     display_assistant_stream,
+    display_cat_conversation,
     display_config,
+    display_context_warning,
     display_conversation_info,
     display_conversations,
     display_error,
     display_info,
     display_models,
+    display_options,
     display_stats,
     get_multiline_input,
     get_user_input,
@@ -51,6 +55,7 @@ def handle_command(cmd, args, client, conversation, state):
         print_help()
 
     elif cmd == "/exit":
+        _auto_save(conversation, state)
         display_info("Goodbye!")
         return False
 
@@ -71,6 +76,7 @@ def handle_command(cmd, args, client, conversation, state):
         else:
             new_model = args
             state["model"] = new_model
+            state["context_length"] = client.get_context_length(new_model)
             display_info(f"Switched to model: {new_model}")
 
     elif cmd == "/system":
@@ -111,6 +117,36 @@ def handle_command(cmd, args, client, conversation, state):
             except Exception as e:
                 display_error(f"Failed to load: {e}")
 
+    elif cmd == "/cat":
+        name = args.strip()
+        if not name:
+            display_error("Usage: /cat <name>")
+        else:
+            try:
+                conv_dir = state["config"]["conversations_dir"]
+                loaded_conv, loaded_model = Conversation.load(conv_dir, name)
+                display_cat_conversation(name, loaded_conv, loaded_model)
+            except FileNotFoundError:
+                display_error(f"No saved conversation named '{name}'.")
+            except Exception as e:
+                display_error(f"Failed to read conversation: {e}")
+
+    elif cmd == "/recall":
+        arg = args.strip()
+        if not arg:
+            display_error("Usage: /recall <pair_number>")
+        else:
+            try:
+                pair_index = int(arg)
+            except ValueError:
+                display_error("Pair number must be an integer.")
+                return True
+            try:
+                conversation.recall(pair_index)
+                display_info(f"Recalled pair {pair_index} into context.")
+            except IndexError as e:
+                display_error(str(e))
+
     elif cmd == "/conversations":
         conv_dir = state["config"]["conversations_dir"]
         conversations = Conversation.list_saved(conv_dir)
@@ -121,8 +157,47 @@ def handle_command(cmd, args, client, conversation, state):
         status = "on" if state["show_stats"] else "off"
         display_info(f"Stats display: {status}")
 
+    elif cmd == "/set":
+        option_keys = {"seed": int, "temperature": float, "top_p": float}
+        if not args:
+            display_options(state["options"])
+        else:
+            parts = args.strip().split(None, 1)
+            key = parts[0]
+            if key not in option_keys:
+                display_error(
+                    f"Unknown option: {key}. "
+                    f"Available: {', '.join(sorted(option_keys))}"
+                )
+            elif len(parts) < 2:
+                val = state["options"][key]
+                display_info(f"{key}: {val if val is not None else 'default'}")
+            else:
+                raw = parts[1]
+                if raw == "default":
+                    state["options"][key] = None
+                    display_info(f"{key} reset to default.")
+                else:
+                    try:
+                        state["options"][key] = option_keys[key](raw)
+                        display_info(f"{key} set to {state['options'][key]}.")
+                    except ValueError:
+                        expected = option_keys[key].__name__
+                        display_error(f"{key} must be {expected} (or 'default').")
+
+    elif cmd == "/retry":
+        if len(conversation.messages) < 2:
+            display_error("Nothing to retry (need at least one exchange).")
+        elif conversation.messages[-1]["role"] != "assistant":
+            display_error("Last message is not an assistant response.")
+        else:
+            conversation.messages.pop()  # remove assistant
+            retry_text = conversation.messages[-1]["content"]
+            conversation.messages.pop()  # remove user (REPL will re-add)
+            state["retry_text"] = retry_text
+
     elif cmd == "/config":
-        display_config(state["config"], state["model"])
+        display_config(state["config"], state["model"], state["options"])
 
     elif cmd == "/info":
         display_conversation_info(conversation.summary(), state.get("last_stats"))
@@ -131,6 +206,19 @@ def handle_command(cmd, args, client, conversation, state):
         display_error(f"Unknown command: {cmd}. Type /? for available commands.")
 
     return True
+
+
+def _auto_save(conversation, state):
+    """Silently auto-save the conversation if enabled."""
+    if not state["config"].get("auto_save", True):
+        return
+    if not conversation.messages:
+        return
+    try:
+        conv_dir = state["config"]["conversations_dir"]
+        conversation.save(conv_dir, name=state["auto_save_name"], model=state["model"])
+    except OSError:
+        pass
 
 
 def main():
@@ -159,7 +247,21 @@ def main():
             sys.exit(1)
         model = models[0]
 
-    state = {"model": model, "config": config, "show_stats": False}
+    options = {
+        "seed": config["seed"],
+        "temperature": config["temperature"],
+        "top_p": config["top_p"],
+    }
+    auto_save_name = "auto_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    context_length = client.get_context_length(model)
+    state = {
+        "model": model,
+        "config": config,
+        "show_stats": False,
+        "options": options,
+        "auto_save_name": auto_save_name,
+        "context_length": context_length,
+    }
     conversation = Conversation(system_prompt=config["system_prompt"])
 
     init_readline()
@@ -195,7 +297,11 @@ def main():
                 cmd_args = parts[1] if len(parts) > 1 else ""
                 if not handle_command(cmd, cmd_args, client, conversation, state):
                     break
-                continue
+                # Check if /retry set text to re-send
+                if "retry_text" in state:
+                    text = state.pop("retry_text")
+                else:
+                    continue
 
             # Send message to model
             conversation.add_user(text)
@@ -203,12 +309,19 @@ def main():
                 chat_stream = client.chat(
                     model=state["model"],
                     messages=conversation.get_messages(),
+                    options=state["options"],
                 )
                 response = display_assistant_stream(chat_stream)
                 conversation.add_assistant(response)
                 state["last_stats"] = chat_stream.stats
                 if state["show_stats"]:
                     display_stats(chat_stream.stats)
+                # Context window warning
+                ctx_len = state.get("context_length")
+                prompt_tokens = chat_stream.stats.get("prompt_eval_count", 0)
+                if ctx_len and prompt_tokens > 0.8 * ctx_len:
+                    display_context_warning(prompt_tokens, ctx_len)
+                _auto_save(conversation, state)
             except KeyboardInterrupt:
                 console.print()
                 display_info("Response interrupted.")
@@ -222,6 +335,7 @@ def main():
 
             console.print()
     finally:
+        _auto_save(conversation, state)
         save_readline_history()
 
 

@@ -22,19 +22,47 @@ class OllamaClient:
         data = resp.json()
         return [m["name"] for m in data.get("models", [])]
 
-    def chat(self, model, messages, stream=True):
+    def get_context_length(self, model):
+        """Query the model's context length from Ollama.
+
+        Returns the context length as an int, or None if unavailable.
+        """
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/show",
+                json={"model": model},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            model_info = resp.json().get("model_info", {})
+            for key, value in model_info.items():
+                if key.endswith(".context_length"):
+                    return int(value)
+        except (requests.ConnectionError, requests.HTTPError, ValueError, KeyError):
+            pass
+        return None
+
+    def chat(self, model, messages, stream=True, options=None):
         """Send a chat request. Returns a ChatStream that yields tokens.
 
         The ChatStream object also exposes a .stats dict after iteration
         completes, containing eval_count, tokens_per_second, etc.
 
         If stream=False, yields a single string with the full response.
+
+        Args:
+            options: Dict of model parameters (seed, temperature, top_p).
+                     None values are omitted so Ollama uses its defaults.
         """
         payload = {
             "model": model,
             "messages": messages,
             "stream": stream,
         }
+        if options:
+            filtered = {k: v for k, v in options.items() if v is not None}
+            if filtered:
+                payload["options"] = filtered
         resp = requests.post(
             f"{self.base_url}/api/chat",
             json=payload,
