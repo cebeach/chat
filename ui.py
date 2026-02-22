@@ -71,7 +71,7 @@ def print_help():
     table.add_row("/clear", "Clear conversation history")
     table.add_row("/models", "List available models")
     table.add_row("/model <name>", "Switch to a different model")
-    table.add_row("/system <prompt>", "Set the system prompt")
+    table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline)')
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
