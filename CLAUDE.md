@@ -16,8 +16,8 @@ Requires a running Ollama instance (`ollama serve`).
 ## Linting
 
 ```bash
-ruff check .
-ruff format --check .
+venv/bin/ruff check .
+venv/bin/ruff format --check .
 ```
 
 ## Architecture
