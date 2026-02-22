@@ -83,6 +83,11 @@ def handle_command(cmd, args, client, conversation, state):
         if not args:
             current = conversation.system_prompt or "(none)"
             display_info(f"Current system prompt: {current}")
+        elif args.strip() == '"""':
+            text = get_multiline_input()
+            if text is not None:
+                conversation.system_prompt = text
+                display_info("System prompt set.")
         else:
             conversation.system_prompt = args
             display_info("System prompt set.")

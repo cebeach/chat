@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.table import Table
 from rich.theme import Theme
 
@@ -72,7 +71,7 @@ def print_help():
     table.add_row("/clear", "Clear conversation history")
     table.add_row("/models", "List available models")
     table.add_row("/model <name>", "Switch to a different model")
-    table.add_row("/system <prompt>", "Set the system prompt")
+    table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline)')
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
@@ -83,7 +82,7 @@ def print_help():
     table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/config", "Show current configuration")
-    table.add_row('"""', "Enter multiline input mode")
+    table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
     console.print(table)
 
 
@@ -183,7 +182,7 @@ def display_cat_conversation(name, conversation, model):
             console.print(
                 f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]{ts_display}"
             )
-        console.print(Markdown(msg["content"]))
+        console.print(msg["content"])
         console.print()
 
 
@@ -210,7 +209,7 @@ def display_error(msg):
 
 
 def display_assistant_stream(token_generator):
-    """Print streamed tokens live, then re-render as markdown.
+    """Print streamed tokens live with word-wrap.
 
     Returns the full response text.
     """
@@ -270,13 +269,9 @@ def display_assistant_stream(token_generator):
         if col > 0:
             visual_lines += 1
 
-        # Clear the raw streamed output and re-render as markdown.
-        sys.stdout.write("\r")
-        for _ in range(visual_lines):
-            sys.stdout.write("\033[A")
-        sys.stdout.write("\033[J")
+        # Move to next line after streaming completes
+        sys.stdout.write("\n")
         sys.stdout.flush()
-        console.print(Markdown(full_text))
 
     return full_text
 
@@ -331,6 +326,10 @@ def init_readline():
     readline.set_completer(_command_completer)
     readline.set_completer_delims(" ")
     readline.parse_and_bind("tab: complete")
+    readline.parse_and_bind("set enable-bracketed-paste on")
+    readline.parse_and_bind(r'"\M-\C-m": "\n"')
+    readline.parse_and_bind(r'"\e[13;2u": "\n"')    # Shift+Enter — Kitty keyboard protocol
+    readline.parse_and_bind(r'"\e[27;2;13~": "\n"')  # Shift+Enter — xterm modifyOtherKeys
 
 
 def save_readline_history():
@@ -389,21 +388,16 @@ def get_user_input():
             print()
             return ""
 
-        # Stuff the first character into readline's input buffer
-        # so it appears as part of the editable line.
-        # stuff_char exists at runtime in CPython but is not in the
-        # type stubs, so use hasattr + getattr to avoid type errors.
-        _stuff_char = getattr(readline, "stuff_char", None)
-        if _stuff_char is not None:
-            _stuff_char(ord(ch))
-        else:
-            # Fallback: use pre_input_hook to insert the character
-            def insert_char():
-                readline.insert_text(ch)
-                readline.redisplay()
-                readline.set_pre_input_hook(None)
+        # Insert the first character into readline's editing buffer via
+        # pre_input_hook so it appears as part of the editable line.
+        # Using insert_text + redisplay avoids the terminal-echo race
+        # condition that stuff_char can trigger.
+        def insert_char():
+            readline.insert_text(ch)
+            readline.redisplay()
+            readline.set_pre_input_hook(None)
 
-            readline.set_pre_input_hook(insert_char)
+        readline.set_pre_input_hook(insert_char)
 
         try:
             return input(rl_prompt)
