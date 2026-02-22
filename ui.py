@@ -388,21 +388,16 @@ def get_user_input():
             print()
             return ""
 
-        # Stuff the first character into readline's input buffer
-        # so it appears as part of the editable line.
-        # stuff_char exists at runtime in CPython but is not in the
-        # type stubs, so use hasattr + getattr to avoid type errors.
-        _stuff_char = getattr(readline, "stuff_char", None)
-        if _stuff_char is not None:
-            _stuff_char(ord(ch))
-        else:
-            # Fallback: use pre_input_hook to insert the character
-            def insert_char():
-                readline.insert_text(ch)
-                readline.redisplay()
-                readline.set_pre_input_hook(None)
+        # Insert the first character into readline's editing buffer via
+        # pre_input_hook so it appears as part of the editable line.
+        # Using insert_text + redisplay avoids the terminal-echo race
+        # condition that stuff_char can trigger.
+        def insert_char():
+            readline.insert_text(ch)
+            readline.redisplay()
+            readline.set_pre_input_hook(None)
 
-            readline.set_pre_input_hook(insert_char)
+        readline.set_pre_input_hook(insert_char)
 
         try:
             return input(rl_prompt)
