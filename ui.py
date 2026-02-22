@@ -2,6 +2,8 @@ import os
 import readline
 import signal
 import sys
+import termios
+import tty
 from datetime import datetime
 from pathlib import Path
 
@@ -32,15 +34,6 @@ COMMANDS = [
     "/stats",
     "/system",
 ]
-
-_conversations_dir = ""
-
-
-def set_conversations_dir(path):
-    """Set the conversations directory for tab-completion of /load."""
-    global _conversations_dir
-    _conversations_dir = path
-
 
 theme = Theme(
     {
@@ -302,30 +295,26 @@ def display_stats(stats):
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 
 
-def _command_completer(text, state):
-    """Readline completer for slash commands and /load arguments."""
-    line = readline.get_line_buffer().lstrip()
-    if (line.startswith("/load ") or line.startswith("/cat ")) and _conversations_dir:
-        names = [n for n, _ in Conversation.list_saved(_conversations_dir)]
-        matches = [n for n in names if n.startswith(text)]
-    elif text.startswith("/"):
-        matches = [c for c in COMMANDS if c.startswith(text)]
-    else:
-        matches = []
-    if state < len(matches):
-        return matches[state]
-    return None
-
-
-def init_readline():
+def init_readline(conversations_dir):
     """Load readline history from disk and configure tab-completion."""
+    def completer(text, state):
+        line = readline.get_line_buffer().lstrip()
+        if (line.startswith("/load ") or line.startswith("/cat ")) and conversations_dir:
+            names = [n for n, _ in Conversation.list_saved(conversations_dir)]
+            matches = [n for n in names if n.startswith(text)]
+        elif text.startswith("/"):
+            matches = [c for c in COMMANDS if c.startswith(text)]
+        else:
+            matches = []
+        return matches[state] if state < len(matches) else None
+
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         readline.read_history_file(HISTORY_FILE)
     except FileNotFoundError:
         pass
     readline.set_history_length(HISTORY_MAX)
-    readline.set_completer(_command_completer)
+    readline.set_completer(completer)
     readline.set_completer_delims(" ")
     readline.parse_and_bind("tab: complete")
     readline.parse_and_bind("set enable-bracketed-paste on")
@@ -350,9 +339,6 @@ def get_user_input():
     Ctrl-C clears the current line and re-prompts.
     Returns None on EOF (Ctrl-D).
     """
-    import termios
-    import tty
-
     PROMPT = ">>> "
     PLACEHOLDER = "Send a message (/? for help)"
 

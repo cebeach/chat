@@ -8,36 +8,31 @@ class Conversation:
         self.system_prompt = system_prompt
         self.messages = []
 
-    def add_user(self, content):
+    def _add(self, role, content):
         self.messages.append(
             {
-                "role": "user",
+                "role": role,
                 "content": content,
                 "timestamp": datetime.now().isoformat(),
             }
         )
 
+    def add_user(self, content):
+        self._add("user", content)
+
     def add_assistant(self, content):
-        self.messages.append(
-            {
-                "role": "assistant",
-                "content": content,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
+        self._add("assistant", content)
 
     def clear(self):
         self.messages.clear()
 
     def summary(self):
         """Return a dict of conversation statistics."""
-        user_msgs = [m for m in self.messages if m["role"] == "user"]
-        asst_msgs = [m for m in self.messages if m["role"] == "assistant"]
         all_content = " ".join(m["content"] for m in self.messages)
         return {
             "messages": len(self.messages),
-            "user_messages": len(user_msgs),
-            "assistant_messages": len(asst_msgs),
+            "user_messages": sum(1 for m in self.messages if m["role"] == "user"),
+            "assistant_messages": sum(1 for m in self.messages if m["role"] == "assistant"),
             "words": len(all_content.split()) if all_content.strip() else 0,
             "characters": sum(len(m["content"]) for m in self.messages),
         }
