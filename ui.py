@@ -1,4 +1,6 @@
+import os
 import readline
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -384,6 +386,10 @@ def get_user_input():
         if ch == "\x04":  # Ctrl-D
             print()
             return None
+        if ch == "\x1a":  # Ctrl-Z — background the process
+            print()
+            os.kill(os.getpid(), signal.SIGTSTP)
+            continue
         if ch == "\r" or ch == "\n":  # Enter with no input
             print()
             return ""
