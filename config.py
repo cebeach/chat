@@ -14,7 +14,9 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 DEFAULTS = {
     "default_model": "",
     "system_prompt": "",
+    "backend": "ollama",
     "ollama_url": "http://localhost:11434",
+    "llama_url": "http://127.0.0.1:8001",
     "conversations_dir": str(
         Path.home() / ".local" / "share" / "chat" / "conversations"
     ),
