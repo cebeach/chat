@@ -386,7 +386,6 @@ def get_user_input():
         # condition that stuff_char can trigger.
         def insert_char():
             readline.insert_text(ch)
-            readline.redisplay()
             readline.set_pre_input_hook(None)
 
         readline.set_pre_input_hook(insert_char)
