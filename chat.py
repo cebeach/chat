@@ -10,6 +10,7 @@ from requests.exceptions import ConnectionError, HTTPError
 
 from config import load_config
 from conversation import Conversation
+from llama_client import LlamaClient
 from ollama_client import OllamaClient
 from ui import (
     console,
@@ -54,9 +55,15 @@ def parse_args(config):
         help="Model to use (defaults to first available)",
     )
     parser.add_argument(
+        "--backend",
+        choices=["ollama", "llama"],
+        default=config["backend"],
+        help="Backend to use: ollama or llama (default: %(default)s)",
+    )
+    parser.add_argument(
         "--url",
-        default=config["ollama_url"],
-        help="Ollama API base URL (default: %(default)s)",
+        default=None,
+        help="Override server URL",
     )
     return parser.parse_args()
 
@@ -73,8 +80,7 @@ def _handle_set(args, state):
     key = parts[0]
     if key not in _OPTION_KEYS:
         display_error(
-            f"Unknown option: {key}. "
-            f"Available: {', '.join(sorted(_OPTION_KEYS))}"
+            f"Unknown option: {key}. Available: {', '.join(sorted(_OPTION_KEYS))}"
         )
     elif len(parts) < 2:
         val = state.options[key]
@@ -243,13 +249,20 @@ def _auto_save(conversation, state):
 def main():
     config = load_config()
     args = parse_args(config)
-    client = OllamaClient(args.url)
 
-    # Check Ollama availability
-    if not client.is_available():
-        display_error(
+    if args.backend == "llama":
+        url = args.url or config["llama_url"]
+        client = LlamaClient(url)
+        unavailable_msg = "Cannot connect to llama-server. Make sure it's running with: llama-server --port 8001 -m <model>"
+    else:
+        url = args.url or config["ollama_url"]
+        client = OllamaClient(url)
+        unavailable_msg = (
             "Cannot connect to Ollama. Make sure it's running with: ollama serve"
         )
+
+    if not client.is_available():
+        display_error(unavailable_msg)
         sys.exit(1)
 
     # Resolve model
@@ -262,7 +275,14 @@ def main():
             sys.exit(1)
 
         if not models:
-            display_error("No models found. Pull one first with: ollama pull <model>")
+            if args.backend == "llama":
+                display_error(
+                    "No models found. Make sure llama-server is loaded with a model."
+                )
+            else:
+                display_error(
+                    "No models found. Pull one first with: ollama pull <model>"
+                )
             sys.exit(1)
         model = models[0]
 

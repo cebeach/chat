@@ -95,7 +95,12 @@ class ChatStream:
                 return
 
     def _extract_stats(self, data):
-        _STAT_KEYS = ("eval_count", "eval_duration", "prompt_eval_count", "prompt_eval_duration")
+        _STAT_KEYS = (
+            "eval_count",
+            "eval_duration",
+            "prompt_eval_count",
+            "prompt_eval_duration",
+        )
         self.stats = {k: data[k] for k in _STAT_KEYS if k in data}
         # Calculate tokens/sec from nanosecond durations
         eval_count = self.stats.get("eval_count", 0)

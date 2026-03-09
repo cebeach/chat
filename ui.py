@@ -77,7 +77,9 @@ def print_help():
     table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/config", "Show current configuration")
-    table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
+    table.add_row(
+        '"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)"
+    )
     console.print(table)
 
 
@@ -297,9 +299,12 @@ def display_stats(stats):
 
 def init_readline(conversations_dir):
     """Load readline history from disk and configure tab-completion."""
+
     def completer(text, state):
         line = readline.get_line_buffer().lstrip()
-        if (line.startswith("/load ") or line.startswith("/cat ")) and conversations_dir:
+        if (
+            line.startswith("/load ") or line.startswith("/cat ")
+        ) and conversations_dir:
             names = [n for n, _ in Conversation.list_saved(conversations_dir)]
             matches = [n for n in names if n.startswith(text)]
         elif text.startswith("/"):
@@ -319,8 +324,12 @@ def init_readline(conversations_dir):
     readline.parse_and_bind("tab: complete")
     readline.parse_and_bind("set enable-bracketed-paste on")
     readline.parse_and_bind(r'"\M-\C-m": "\n"')
-    readline.parse_and_bind(r'"\e[13;2u": "\n"')    # Shift+Enter — Kitty keyboard protocol
-    readline.parse_and_bind(r'"\e[27;2;13~": "\n"')  # Shift+Enter — xterm modifyOtherKeys
+    readline.parse_and_bind(
+        r'"\e[13;2u": "\n"'
+    )  # Shift+Enter — Kitty keyboard protocol
+    readline.parse_and_bind(
+        r'"\e[27;2;13~": "\n"'
+    )  # Shift+Enter — xterm modifyOtherKeys
 
 
 def save_readline_history():
@@ -386,6 +395,7 @@ def get_user_input():
         # condition that stuff_char can trigger.
         def insert_char():
             readline.insert_text(ch)
+            readline.redisplay()
             readline.set_pre_input_hook(None)
 
         readline.set_pre_input_hook(insert_char)

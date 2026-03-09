@@ -32,7 +32,9 @@ class Conversation:
         return {
             "messages": len(self.messages),
             "user_messages": sum(1 for m in self.messages if m["role"] == "user"),
-            "assistant_messages": sum(1 for m in self.messages if m["role"] == "assistant"),
+            "assistant_messages": sum(
+                1 for m in self.messages if m["role"] == "assistant"
+            ),
             "words": len(all_content.split()) if all_content.strip() else 0,
             "characters": sum(len(m["content"]) for m in self.messages),
         }
