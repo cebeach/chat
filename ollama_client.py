@@ -42,13 +42,11 @@ class OllamaClient:
             pass
         return None
 
-    def chat(self, model, messages, stream=True, options=None):
+    def chat(self, model, messages, options=None):
         """Send a chat request. Returns a ChatStream that yields tokens.
 
         The ChatStream object also exposes a .stats dict after iteration
         completes, containing eval_count, tokens_per_second, etc.
-
-        If stream=False, yields a single string with the full response.
 
         Args:
             options: Dict of model parameters (seed, temperature, top_p).
@@ -57,7 +55,7 @@ class OllamaClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": stream,
+            "stream": True,
         }
         if options:
             filtered = {k: v for k, v in options.items() if v is not None}
@@ -66,12 +64,12 @@ class OllamaClient:
         resp = requests.post(
             f"{self.base_url}/api/chat",
             json=payload,
-            stream=stream,
+            stream=True,
             timeout=120,
         )
         resp.raise_for_status()
 
-        return ChatStream(resp, stream)
+        return ChatStream(resp)
 
 
 class ChatStream:
@@ -80,18 +78,11 @@ class ChatStream:
     After iteration, .stats contains token metadata from the final chunk.
     """
 
-    def __init__(self, response, stream):
+    def __init__(self, response):
         self._response = response
-        self._stream = stream
         self.stats = {}
 
     def __iter__(self):
-        if not self._stream:
-            data = self._response.json()
-            self._extract_stats(data)
-            yield data.get("message", {}).get("content", "")
-            return
-
         for line in self._response.iter_lines():
             if not line:
                 continue
@@ -104,14 +95,8 @@ class ChatStream:
                 return
 
     def _extract_stats(self, data):
-        for key in (
-            "eval_count",
-            "eval_duration",
-            "prompt_eval_count",
-            "prompt_eval_duration",
-        ):
-            if key in data:
-                self.stats[key] = data[key]
+        _STAT_KEYS = ("eval_count", "eval_duration", "prompt_eval_count", "prompt_eval_duration")
+        self.stats = {k: data[k] for k in _STAT_KEYS if k in data}
         # Calculate tokens/sec from nanosecond durations
         eval_count = self.stats.get("eval_count", 0)
         eval_duration = self.stats.get("eval_duration", 0)

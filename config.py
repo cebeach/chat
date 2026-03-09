@@ -36,8 +36,6 @@ def load_config():
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "rb") as f:
             file_config = tomllib.load(f)
-        for key in DEFAULTS:
-            if key in file_config:
-                config[key] = file_config[key]
+        config.update({k: file_config[k] for k in DEFAULTS if k in file_config})
 
     return config
