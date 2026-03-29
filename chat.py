@@ -2,6 +2,7 @@
 """AI Chat — a terminal chat application powered by Ollama."""
 
 import argparse
+from pathlib import Path
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -40,7 +41,7 @@ class State:
     config: dict
     context_length: int | None
     options: dict = field(default_factory=dict)
-    show_stats: bool = False
+    show_stats: bool = True
     last_stats: dict = field(default_factory=dict)
     retry_text: str | None = None
     auto_save_name: str = ""
@@ -71,6 +72,28 @@ def parse_args(config):
 _OPTION_KEYS = {"seed": int, "temperature": float, "top_p": float}
 
 
+def _read_file(path: str, config: dict) -> tuple[bool, str]:
+    """Read a UTF‑8 text file with size limit.
+
+    Returns (True, content) on success or (False, error_msg) on failure.
+    """
+    # Resolve the path relative to cwd, expand user (~)
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        return False, "File not found."
+
+    # Enforce size limit from config
+    limit_kb = config.get("read_file_max_kb", 32)
+    if resolved.stat().st_size > limit_kb * 1024:
+        return False, f"File too large ({limit_kb} KB max)."
+
+    try:
+        content = resolved.read_text(encoding="utf-8")
+    except Exception as e:
+        return False, f"Cannot read file: {e}"
+    return True, content
+
+
 def _handle_set(args, state):
     """Handle the /set command: list, query, or modify a model option."""
     if not args:
@@ -79,9 +102,7 @@ def _handle_set(args, state):
     parts = args.strip().split(None, 1)
     key = parts[0]
     if key not in _OPTION_KEYS:
-        display_error(
-            f"Unknown option: {key}. Available: {', '.join(sorted(_OPTION_KEYS))}"
-        )
+        display_error(f"Unknown option: {key}. Available: {', '.join(sorted(_OPTION_KEYS))}")
     elif len(parts) < 2:
         val = state.options[key]
         display_info(f"{key}: {val if val is not None else 'default'}")
@@ -221,6 +242,20 @@ def handle_command(cmd, args, client, conversation, state):
             state.retry_text = conversation.messages[-1]["content"]
             conversation.messages.pop()  # remove user (REPL will re-add)
 
+    elif cmd == "/read":
+        if not args:
+            display_error("Usage: /read <path>")
+            return True
+        ok, result = _read_file(args, state.config)
+        if ok:
+            # Store content to be sent on the next loop iteration
+            state.retry_text = result
+            console.print("User:")
+            console.print(result)
+        else:
+            display_error(result)
+        return True
+
     elif cmd == "/config":
         display_config(state.config, state.model, state.options)
 
@@ -253,13 +288,13 @@ def main():
     if args.backend == "llama":
         url = args.url or config["llama_url"]
         client = LlamaClient(url)
-        unavailable_msg = "Cannot connect to llama-server. Make sure it's running with: llama-server --port 8001 -m <model>"
+        unavailable_msg = (
+            "Cannot connect to llama-server. Make sure it's running with: llama-server --port 8001 -m <model>"
+        )
     else:
         url = args.url or config["ollama_url"]
         client = OllamaClient(url)
-        unavailable_msg = (
-            "Cannot connect to Ollama. Make sure it's running with: ollama serve"
-        )
+        unavailable_msg = "Cannot connect to Ollama. Make sure it's running with: ollama serve"
 
     if not client.is_available():
         display_error(unavailable_msg)
@@ -276,13 +311,9 @@ def main():
 
         if not models:
             if args.backend == "llama":
-                display_error(
-                    "No models found. Make sure llama-server is loaded with a model."
-                )
+                display_error("No models found. Make sure llama-server is loaded with a model.")
             else:
-                display_error(
-                    "No models found. Pull one first with: ollama pull <model>"
-                )
+                display_error("No models found. Pull one first with: ollama pull <model>")
             sys.exit(1)
         model = models[0]
 
@@ -300,7 +331,7 @@ def main():
     conversation = Conversation(system_prompt=config["system_prompt"])
 
     init_readline(config["conversations_dir"])
-    print_welcome(model)
+    print_welcome(model, args.backend)
 
     # Main REPL
     try:

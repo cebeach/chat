@@ -24,6 +24,7 @@ DEFAULTS = {
     "seed": None,
     "temperature": None,
     "top_p": None,
+    "read_file_max_kb": 32,
 }
 
 

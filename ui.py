@@ -17,6 +17,7 @@ HISTORY_FILE = Path.home() / ".local" / "share" / "chat" / "history"
 HISTORY_MAX = 1000
 
 COMMANDS = [
+    "/read",
     "/?",
     "/cat",
     "/clear",
@@ -48,9 +49,9 @@ theme = Theme(
 console = Console(theme=theme)
 
 
-def print_welcome(model):
+def print_welcome(model, backend="Ollama"):
     console.print()
-    console.print("[bold]AI Chat[/bold] (Ollama)", style="info")
+    console.print(f"[bold]AI Chat[/bold] ({backend})", style="info")
     console.print(f"Model: [bold]{model}[/bold]")
     console.print("Type [bold]/?[/bold] for commands, [bold]/exit[/bold] to quit.")
     console.print()
@@ -67,6 +68,7 @@ def print_help():
     table.add_row("/models", "List available models")
     table.add_row("/model <name>", "Switch to a different model")
     table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline)')
+    table.add_row("/read <path>", "Read a text file into the conversation")
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
@@ -77,9 +79,7 @@ def print_help():
     table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/config", "Show current configuration")
-    table.add_row(
-        '"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)"
-    )
+    table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
     console.print(table)
 
 
@@ -172,9 +172,7 @@ def display_cat_conversation(name, conversation, model):
 
         if msg["role"] == "user":
             pair_index += 1
-            console.print(
-                f"[dim]\\[{pair_index}][/dim] [user_label]You:[/user_label]{ts_display}"
-            )
+            console.print(f"[dim]\\[{pair_index}][/dim] [user_label]You:[/user_label]{ts_display}")
         else:
             console.print(
                 f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]{ts_display}"
@@ -277,10 +275,7 @@ def display_assistant_stream(token_generator):
 def display_context_warning(used, limit):
     """Display a warning when context usage is high."""
     pct = used / limit * 100
-    console.print(
-        f"[warning]Warning: context window {pct:.0f}% full "
-        f"({used:,} / {limit:,} tokens)[/warning]"
-    )
+    console.print(f"[warning]Warning: context window {pct:.0f}% full ({used:,} / {limit:,} tokens)[/warning]")
 
 
 def display_stats(stats):
@@ -303,9 +298,7 @@ def init_readline(conversations_dir):
 
     def completer(text, state):
         line = readline.get_line_buffer().lstrip()
-        if (
-            line.startswith("/load ") or line.startswith("/cat ")
-        ) and conversations_dir:
+        if (line.startswith("/load ") or line.startswith("/cat ")) and conversations_dir:
             names = [n for n, _ in Conversation.list_saved(conversations_dir)]
             matches = [n for n in names if n.startswith(text)]
         elif text.startswith("/"):
@@ -325,12 +318,8 @@ def init_readline(conversations_dir):
     readline.parse_and_bind("tab: complete")
     readline.parse_and_bind("set enable-bracketed-paste on")
     readline.parse_and_bind(r'"\M-\C-m": "\n"')
-    readline.parse_and_bind(
-        r'"\e[13;2u": "\n"'
-    )  # Shift+Enter — Kitty keyboard protocol
-    readline.parse_and_bind(
-        r'"\e[27;2;13~": "\n"'
-    )  # Shift+Enter — xterm modifyOtherKeys
+    readline.parse_and_bind(r'"\e[13;2u": "\n"')  # Shift+Enter — Kitty keyboard protocol
+    readline.parse_and_bind(r'"\e[27;2;13~": "\n"')  # Shift+Enter — xterm modifyOtherKeys
 
 
 def save_readline_history():
