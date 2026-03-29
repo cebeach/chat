@@ -34,5 +34,13 @@ A Python chat application that provides a terminal-based interface for chatting 
 - **Multiline input** — `"""` delimiters for multi-line prompts; Shift+Enter or Alt+Enter inserts a newline without submitting; paste support via bracketed-paste mode
 - **Multiline system prompts** — `/system """` opens the same multiline input mode for setting multi-paragraph system prompts
 
+## Read from file
+
+- **Command**: `/read <path>`
+- **Description**: Read a UTF‑8 text file into the conversation as a user message.
+- **File size limit**: 32 KB by default (configurable via `read_file_max_kb` in `~/.config/chat/config.toml`).
+- **Error handling**: Non‑existent files, oversized files, or read errors produce a user‑friendly error message.
+
+
 ---
 Built with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
