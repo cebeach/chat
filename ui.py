@@ -210,7 +210,8 @@ def display_assistant_stream(token_generator):
 
     Returns the full response text.
     """
-    console.print("[assistant_label]Assistant:[/assistant_label]")
+    now_ts = datetime.now().isoformat()
+    console.print(f"[assistant_label]Assistant:[/assistant_label] {now_ts}\n", end="")
     full_text = ""
     term_width = console.width or 80
     col = 0  # current column position
