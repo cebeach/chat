@@ -156,8 +156,38 @@ def handle_command(cmd, args, client, conversation, state):
                 conversation.system_prompt = text
                 display_info("System prompt set.")
         else:
-            conversation.system_prompt = args
-            display_info("System prompt set.")
+            # Attempt to interpret args as a file path
+            # Resolve path relative to cwd, expand user
+            from pathlib import Path
+            resolved_path = Path(args).expanduser().resolve()
+            cwd = Path.cwd()
+            try:
+                # Python 3.9+ has is_relative_to
+                if resolved_path.is_relative_to(cwd):
+                    in_cwd = True
+                else:
+                    in_cwd = False
+            except AttributeError:
+                # For older Python, compare commonpath
+                in_cwd = resolved_path.is_relative_to(cwd) if hasattr(resolved_path, "is_relative_to") else False
+            # Fallback for older versions
+            if not in_cwd:
+                # Check if resolved_path is under cwd by walking parents
+                try:
+                    in_cwd = cwd in resolved_path.parents or resolved_path == cwd
+                except Exception:
+                    in_cwd = False
+            if in_cwd and resolved_path.is_file():
+                ok, result = _read_file(str(resolved_path), state.config)
+                if ok:
+                    conversation.system_prompt = result
+                    display_info("System prompt set from file.")
+                else:
+                    display_error(result)
+            else:
+                # Treat as plain string prompt
+                conversation.system_prompt = args
+                display_info("System prompt set.")
 
     elif cmd == "/save":
         name = args.strip() or None

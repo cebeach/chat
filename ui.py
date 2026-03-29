@@ -67,7 +67,7 @@ def print_help():
     table.add_row("/clear", "Clear conversation history")
     table.add_row("/models", "List available models")
     table.add_row("/model <name>", "Switch to a different model")
-    table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline)')
+    table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline or a path to a file within the current directory)')
     table.add_row("/read <path>", "Read a text file into the conversation")
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
