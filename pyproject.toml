@@ -1,0 +1,30 @@
+[tool.ruff]
+# https://docs.astral.sh/ruff/configuration/
+line-length = 110
+#extend-exclude = [
+#   path1,
+#   path2
+#]
+# https://flake8.pycqa.org/en/latest/user/error-codes.html
+# This is needs to be kept in sync with the flake8 config
+exclude = [
+    ".git",
+    ".venv",
+    ".tox",
+    "venv"]
+# ruff only support flake8-debugger's rule T100
+#lint.select = [
+#    "F",
+#    "T",
+#    "E722"
+#]
+# skipping unused errors for now: F401, F841
+# skip errors due to someone elses __all__ not defined: F403
+# dont error just because print is missing
+lint.ignore = [
+    "F401",
+    "F841",
+    "F403",
+    "T201",
+]
+
