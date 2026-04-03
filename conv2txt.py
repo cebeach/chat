@@ -108,6 +108,10 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
             header_lines.append(f"Model: {model}")
         if system_prompt:
             header_lines.append(f"System prompt: {system_prompt}")
+            # Add source file if present
+            source_file = data.get("source_file")
+            if source_file:
+                header_lines.append(f"from: {source_file}")
         if header_lines:
             # Add the separator line of 60 dashes.
             header_lines.append("-" * 60)
@@ -122,6 +126,7 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
         role = msg.get("role", "unknown")
         content = msg.get("content", "")
         ts = msg.get("timestamp", "")
+        source_file = msg.get("source_file")
 
         ts_suffix = ""
         if ts:
@@ -137,6 +142,10 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
             lines.append(f"Assistant{ts_suffix}:")
         else:
             lines.append(f"{role.capitalize()}{ts_suffix}:")
+
+        # Add source file annotation if present
+        if source_file:
+            lines.append(f"[from: {source_file}]")
 
         # Wrap the content of the message.
         wrapped_content = wrap_block(content, line_length)
