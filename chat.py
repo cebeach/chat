@@ -45,6 +45,7 @@ class State:
     last_stats: dict = field(default_factory=dict)
     retry_text: str | None = None
     auto_save_name: str = ""
+    last_read_file: str | None = None
 
 
 def parse_args(config):
@@ -158,7 +159,6 @@ def handle_command(cmd, args, client, conversation, state):
         else:
             # Attempt to interpret args as a file path
             # Resolve path relative to cwd, expand user
-            from pathlib import Path
             resolved_path = Path(args).expanduser().resolve()
             cwd = Path.cwd()
             try:
@@ -169,7 +169,9 @@ def handle_command(cmd, args, client, conversation, state):
                     in_cwd = False
             except AttributeError:
                 # For older Python, compare commonpath
-                in_cwd = resolved_path.is_relative_to(cwd) if hasattr(resolved_path, "is_relative_to") else False
+                in_cwd = (
+                    resolved_path.is_relative_to(cwd) if hasattr(resolved_path, "is_relative_to") else False
+                )
             # Fallback for older versions
             if not in_cwd:
                 # Check if resolved_path is under cwd by walking parents
@@ -181,12 +183,14 @@ def handle_command(cmd, args, client, conversation, state):
                 ok, result = _read_file(str(resolved_path), state.config)
                 if ok:
                     conversation.system_prompt = result
+                    conversation.source_file = str(resolved_path)
                     display_info("System prompt set from file.")
                 else:
                     display_error(result)
             else:
                 # Treat as plain string prompt
                 conversation.system_prompt = args
+                conversation.source_file = None
                 display_info("System prompt set.")
 
     elif cmd == "/save":
@@ -278,8 +282,9 @@ def handle_command(cmd, args, client, conversation, state):
             return True
         ok, result = _read_file(args, state.config)
         if ok:
-            # Store content to be sent on the next loop iteration
+            # Store content and file path for next loop iteration
             state.retry_text = result
+            state.last_read_file = str(Path(args).expanduser().resolve())
             console.print("User:")
             console.print(result)
         else:
@@ -357,6 +362,7 @@ def main():
             "top_p": config["top_p"],
         },
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
+        last_read_file=None,
     )
     conversation = Conversation(system_prompt=config["system_prompt"])
 
@@ -392,41 +398,54 @@ def main():
                 cmd_args = parts[1] if len(parts) > 1 else ""
                 if not handle_command(cmd, cmd_args, client, conversation, state):
                     break
-                # Check if /retry set text to re-send
+                # Check if /retry or /read set text to re-send
                 if state.retry_text is not None:
                     text = state.retry_text
                     state.retry_text = None
+                    # Check if this text came from /read
+                    source_file = getattr(state, "last_read_file", None)
+                    if source_file:
+                        conversation.add_user(text, source_file=source_file)
+                        state.last_read_file = None
+                    else:
+                        conversation.add_user(text)
                 else:
+                    # Commands don't become messages
                     continue
+                # Message already added above, skip to chat()
+                send_to_model = True
+            else:
+                # Not a command, add as user message and send to model
+                conversation.add_user(text)
+                send_to_model = True
 
-            # Send message to model
-            conversation.add_user(text)
-            try:
-                chat_stream = client.chat(
-                    model=state.model,
-                    messages=conversation.get_messages(),
-                    options=state.options,
-                )
-                response = display_assistant_stream(chat_stream)
-                conversation.add_assistant(response)
-                state.last_stats = chat_stream.stats
-                if state.show_stats:
-                    display_stats(chat_stream.stats)
-                # Context window warning
-                prompt_tokens = chat_stream.stats.get("prompt_eval_count", 0)
-                if state.context_length and prompt_tokens > 0.8 * state.context_length:
-                    display_context_warning(prompt_tokens, state.context_length)
-                _auto_save(conversation, state)
-            except KeyboardInterrupt:
-                console.print()
-                display_info("Response interrupted.")
-            except ConnectionError:
-                display_error("Lost connection to Ollama. Is it still running?")
-                # Remove the unanswered user message
-                conversation.messages.pop()
-            except HTTPError as e:
-                display_error(f"Ollama error: {e}")
-                conversation.messages.pop()
+            if send_to_model:
+                try:
+                    chat_stream = client.chat(
+                        model=state.model,
+                        messages=conversation.get_messages(),
+                        options=state.options,
+                    )
+                    response = display_assistant_stream(chat_stream)
+                    conversation.add_assistant(response)
+                    state.last_stats = chat_stream.stats
+                    if state.show_stats:
+                        display_stats(chat_stream.stats)
+                    # Context window warning
+                    prompt_tokens = chat_stream.stats.get("prompt_eval_count", 0)
+                    if state.context_length and prompt_tokens > 0.8 * state.context_length:
+                        display_context_warning(prompt_tokens, state.context_length)
+                    _auto_save(conversation, state)
+                except KeyboardInterrupt:
+                    console.print()
+                    display_info("Response interrupted.")
+                except ConnectionError:
+                    display_error("Lost connection to Ollama. Is it still running?")
+                    # Remove the unanswered user message
+                    conversation.messages.pop()
+                except HTTPError as e:
+                    display_error(f"Ollama error: {e}")
+                    conversation.messages.pop()
 
             console.print()
     finally:

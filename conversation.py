@@ -7,18 +7,20 @@ class Conversation:
     def __init__(self, system_prompt=""):
         self.system_prompt = system_prompt
         self.messages = []
+        self.source_file = None
 
-    def _add(self, role, content):
-        self.messages.append(
-            {
-                "role": role,
-                "content": content,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
+    def _add(self, role, content, source_file=None):
+        msg = {
+            "role": role,
+            "timestamp": datetime.now().isoformat(),
+        }
+        if source_file is not None:
+            msg["source_file"] = source_file
+        msg["content"] = content  # Add content last
+        self.messages.append(msg)
 
-    def add_user(self, content):
-        self._add("user", content)
+    def add_user(self, content, source_file=None):
+        self._add("user", content, source_file=source_file)
 
     def add_assistant(self, content):
         self._add("assistant", content)
@@ -32,9 +34,7 @@ class Conversation:
         return {
             "messages": len(self.messages),
             "user_messages": sum(1 for m in self.messages if m["role"] == "user"),
-            "assistant_messages": sum(
-                1 for m in self.messages if m["role"] == "assistant"
-            ),
+            "assistant_messages": sum(1 for m in self.messages if m["role"] == "assistant"),
             "words": len(all_content.split()) if all_content.strip() else 0,
             "characters": sum(len(m["content"]) for m in self.messages),
         }
@@ -70,10 +70,7 @@ class Conversation:
         user_msg, asst_msg = self.get_pair(pair_index)
         note = {
             "role": "user",
-            "content": (
-                "[The following exchange is recalled from earlier "
-                "in the conversation for context]"
-            ),
+            "content": ("[The following exchange is recalled from earlier in the conversation for context]"),
             "timestamp": datetime.now().isoformat(),
         }
         self.messages.append(note)
@@ -82,11 +79,15 @@ class Conversation:
             self.messages.append({"role": "assistant", "content": asst_msg["content"]})
 
     def get_messages(self):
-        """Return messages list with system prompt prepended if set."""
+        """Return messages list with system prompt prepended if set.
+
+        Only returns 'role' and 'content' fields (not metadata like source_file).
+        """
         msgs = []
         if self.system_prompt:
             msgs.append({"role": "system", "content": self.system_prompt})
-        msgs.extend(self.messages)
+        for msg in self.messages:
+            msgs.append({"role": msg["role"], "content": msg["content"]})
         return msgs
 
     def save(self, conversations_dir, name=None, model=""):
@@ -110,11 +111,12 @@ class Conversation:
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         filepath = dirpath / f"{safe_name}.json"
 
-        data = {
-            "model": model,
-            "system_prompt": self.system_prompt,
-            "messages": self.messages,
-        }
+        # Build data dict with source_file positioned after model
+        data = {"model": model}
+        if self.source_file is not None:
+            data["source_file"] = self.source_file
+        data["system_prompt"] = self.system_prompt
+        data["messages"] = self.messages
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
 
@@ -140,6 +142,7 @@ class Conversation:
 
         conv = cls(system_prompt=data.get("system_prompt", ""))
         conv.messages = data.get("messages", [])
+        conv.source_file = data.get("source_file")
         return conv, data.get("model", "")
 
     @staticmethod
@@ -153,7 +156,5 @@ class Conversation:
         if not dirpath.exists():
             return []
 
-        files = sorted(
-            dirpath.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
+        files = sorted(dirpath.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         return [(f.stem, f) for f in files]
