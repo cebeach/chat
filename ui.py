@@ -63,7 +63,7 @@ def print_help():
     table.add_column("Description")
     table.add_row("/cat <name>", "Print a saved conversation to the console")
     table.add_row("/clear", "Clear conversation history")
-    table.add_row("/config", "Show configuration; '/config save_thinking [on|off]' toggles saving <think> blocks")
+    table.add_row("/config", "Show configuration; '/config save_thinking on|off' controls whether <think> blocks are saved (omit on/off to toggle)")
     table.add_row("/conversations", "List saved conversations")
     table.add_row("/exit", "Quit the application")
     table.add_row("/help", "Show this help message")

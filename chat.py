@@ -131,7 +131,7 @@ def _handle_config(args, state):
     elif len(parts) == 2 and parts[1] in ("on", "off"):
         state.config[key] = parts[1] == "on"
     else:
-        display_error(f"Usage: /config {key} [on|off]")
+        display_error(f"Usage: /config {key} on|off (no argument toggles)")
         return
     display_info(f"{key}: {'on' if state.config[key] else 'off'}")
 

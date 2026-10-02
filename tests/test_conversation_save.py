@@ -1,10 +1,12 @@
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import chat
+import ui
 from chat import State, _auto_save, handle_command
 from config import DEFAULTS
 from conversation import Conversation, strip_think
@@ -132,6 +134,17 @@ class ConfigCommandTests(unittest.TestCase):
         self.assertIs(state.config["save_thinking"], True)
         _, err = self.run_config(state, "nonsense")
         self.assertIn("save_thinking", err.call_args.args[0])
+
+    def test_help_and_usage_text_survive_rich_markup(self):
+        # Square brackets such as "[on|off]" would be eaten as Rich markup, so
+        # render the real output instead of mocking the display functions.
+        state = make_state(self.tmp, save_thinking=True)
+        with ui.console.capture() as cap:
+            ui.print_help()
+            handle_command("/config", "save_thinking maybe", None, self.conv, state)
+        out = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", cap.get()).split())
+        self.assertIn("/config save_thinking on|off", out)
+        self.assertIn("Usage: /config save_thinking on|off", out)
 
     def test_no_args_still_displays_config(self):
         state = make_state(self.tmp)
