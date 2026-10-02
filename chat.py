@@ -237,6 +237,7 @@ def handle_command(cmd, args, client, conversation, state):
 
     elif cmd == "/clear":
         conversation.clear()
+        state.last_stats = {}
         display_info("Conversation cleared.")
 
     elif cmd == "/system":
@@ -315,6 +316,8 @@ def handle_command(cmd, args, client, conversation, state):
                 conversation.system_prompt = loaded_conv.system_prompt
                 # Where that system prompt came from (None clears a stale value).
                 conversation.source_file = loaded_conv.source_file
+                # Token counts from the previous conversation no longer apply.
+                state.last_stats = {}
                 # The tag pairs the saving session knew, so this session can strip
                 # the loaded replies even if it never ran those models.
                 _merge_think_pairs(state, loaded_conv.think_pairs)
@@ -383,6 +386,7 @@ def handle_command(cmd, args, client, conversation, state):
             conversation.messages.pop()  # remove assistant
             state.retry_text = conversation.messages[-1]["content"]
             conversation.messages.pop()  # remove user (REPL will re-add)
+            state.last_stats = {}
 
     elif cmd == "/read":
         if not args:
@@ -415,7 +419,7 @@ def handle_command(cmd, args, client, conversation, state):
         _handle_config(args, state, client)
 
     elif cmd == "/info":
-        display_conversation_info(conversation.summary(), state.last_stats)
+        display_conversation_info(conversation.summary(), state.last_stats, state.context_length)
 
     else:
         display_error(f"Unknown command: {cmd}. Type /? for available commands.")

@@ -67,7 +67,7 @@ def print_help():
     table.add_row("/conversations", "List saved conversations")
     table.add_row("/exit", "Quit the application")
     table.add_row("/help", "Show this help message")
-    table.add_row("/info", "Show conversation summary statistics")
+    table.add_row("/info", "Show conversation and context window statistics")
     table.add_row("/load <name>", "Load a saved conversation")
     table.add_row("/read <path>", "Read a text file into the conversation")
     table.add_row("/recall <n>", "Recall message pair n into context")
@@ -206,7 +206,7 @@ def display_cat_conversation(name, conversation, model, think_pairs=()):
         console.print()
 
 
-def display_conversation_info(summary, last_stats=None):
+def display_conversation_info(summary, last_stats=None, context_length=None):
     table = Table(title="Conversation Info", show_header=True, header_style="bold")
     table.add_column("Statistic", style="bold cyan")
     table.add_column("Value")
@@ -217,6 +217,12 @@ def display_conversation_info(summary, last_stats=None):
     table.add_row("Characters", f"{summary['characters']:,}")
     if last_stats and "prompt_tokens" in last_stats:
         table.add_row("Prompt tokens", f"{last_stats['prompt_tokens']:,}")
+    table.add_row("Context window", f"{context_length:,} tokens" if context_length else "unknown")
+    if last_stats and "context_tokens" in last_stats:
+        used = last_stats["context_tokens"]
+        table.add_row("Context used", f"{used:,} tokens")
+        if context_length:
+            table.add_row("Context usage", f"{used / context_length * 100:.1f}%")
     console.print(table)
 
 
