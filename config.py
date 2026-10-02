@@ -12,7 +12,6 @@ CONFIG_DIR = Path.home() / ".config" / "chat"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 DEFAULTS = {
-    "default_model": "",
     "system_prompt": "",
     "llama_url": "http://127.0.0.1:8001",
     "conversations_dir": str(

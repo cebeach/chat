@@ -27,8 +27,6 @@ COMMANDS = [
     "/exit",
     "/info",
     "/load",
-    "/model",
-    "/models",
     "/recall",
     "/retry",
     "/save",
@@ -70,8 +68,6 @@ def print_help():
     table.add_row("/help", "Show this help message")
     table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/load <name>", "Load a saved conversation")
-    table.add_row("/model <name>", "Switch to a different model")
-    table.add_row("/models", "List available models")
     table.add_row("/read <path>", "Read a text file into the conversation")
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
@@ -81,16 +77,6 @@ def print_help():
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline or a path to a file within the current directory)')
     table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
-    console.print(table)
-
-
-def display_models(models, current_model):
-    table = Table(title="Available Models", show_header=True, header_style="bold")
-    table.add_column("Model")
-    table.add_column("Active")
-    for m in models:
-        marker = "*" if m == current_model else ""
-        table.add_row(m, marker)
     console.print(table)
 
 
@@ -130,7 +116,6 @@ def display_config(config, current_model, options=None, think_tags=None):
     table.add_column("Setting", style="bold cyan")
     table.add_column("Value")
     table.add_row("model", current_model)
-    table.add_row("default_model", config["default_model"] or "(none)")
     table.add_row("system_prompt", config["system_prompt"] or "(none)")
     table.add_row("llama_url", config["llama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])

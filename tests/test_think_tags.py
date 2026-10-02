@@ -211,16 +211,16 @@ class FakeResponse:
 class FakeServer:
     """Stands in for requests.get/post against llama-server's native endpoints."""
 
-    def __init__(self, model_path, source, cont, gen, real_prompt="<real>"):
-        self.model_path, self.source = model_path, source
+    def __init__(self, model_path, source, cont, gen, real_prompt="<real>", n_ctx=4096):
+        self.model_path, self.source, self.n_ctx = model_path, source, n_ctx
         self.cont, self.gen, self.real_prompt = cont, gen, real_prompt
         self.fail = False
         self.bad_json = False
         self.props_calls = 0
         self.template_calls = []
 
-    def become(self, model_path, source, cont, gen, real_prompt="<real>"):
-        self.model_path, self.source = model_path, source
+    def become(self, model_path, source, cont, gen, real_prompt="<real>", n_ctx=4096):
+        self.model_path, self.source, self.n_ctx = model_path, source, n_ctx
         self.cont, self.gen, self.real_prompt = cont, gen, real_prompt
 
     def get(self, url, **kw):
@@ -230,7 +230,14 @@ class FakeServer:
         self.props_calls += 1
         if self.bad_json:
             return FakeResponse(ValueError("not json"))
-        return FakeResponse({"model_path": self.model_path, "chat_template": self.source})
+        return FakeResponse(
+            {
+                "model_path": self.model_path,
+                "model_alias": self.model_path,
+                "chat_template": self.source,
+                "default_generation_settings": {"n_ctx": self.n_ctx},
+            }
+        )
 
     def post(self, url, json=None, **kw):
         if url.endswith("/completion"):
@@ -329,12 +336,14 @@ class DetectionTests(unittest.TestCase):
             server.become("/m/odd.gguf", "no words", QWEN_CONT.replace("<|im_start|>user", "X"), QWEN_GEN)
             self.assertEqual(self.client.detect_think_tags(), before)
 
-    def test_the_config_override_wins_and_makes_no_server_calls(self):
+    def test_the_config_override_wins_and_makes_no_template_calls(self):
         client = LlamaClient("http://llama.test", think_override=("[A]", "[/A]"))
         server = qwen_server()
         with server.patched():
             self.assertEqual(client.detect_think_tags(), ("[A]", "[/A]", "config"))
-        self.assertEqual(server.props_calls, 0)
+        # The model and context length are still read from /props (one GET), but
+        # nothing is rendered for detection.
+        self.assertEqual(server.props_calls, 1)
         self.assertEqual(server.template_calls, [])
 
     def test_override_needs_both_keys(self):
@@ -389,7 +398,7 @@ BRACKET = ("[THINK]", "[/THINK]", "detected")
 
 class ConfigRenderingTests(unittest.TestCase):
     def test_think_tags_row_for_each_kind_of_value(self):
-        config = {"default_model": "", "system_prompt": "", "llama_url": "u", "conversations_dir": "d"}
+        config = {"system_prompt": "", "llama_url": "u", "conversations_dir": "d"}
         cases = [
             ((*GEMMA_PAIR, "detected"), "<|channel>thought … <channel|> (detected)"),
             (BRACKET, "[THINK] … [/THINK] (detected)"),  # an unescaped [/THINK] would raise MarkupError

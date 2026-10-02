@@ -1,7 +1,9 @@
 """Client for the llama.cpp server's native HTTP API.
 
-Only native endpoints are used: /health, /props, /models, /apply-template
-and /completion. See tools/server/README.md in the llama.cpp source.
+Only native endpoints are used: /health, /props, /apply-template and
+/completion. See tools/server/README.md in the llama.cpp source. The model
+being served and its context length are read from /props, never chosen by
+the client.
 
 Thinking tags are discovered from the server, not hard-coded; see
 find_think_tags() and docs/thinking-tags.md.
@@ -97,6 +99,9 @@ class LlamaClient:
         self._think_cache = {}  # server identity -> (start, end); accepted pairs only
         self._think_current = (*think_override, "config") if think_override else None
         self._think_fixed = bool(think_override)
+        # What the server is serving, from GET /props (see refresh); None until read.
+        self.server_model = None
+        self.server_n_ctx = None
 
     def is_available(self):
         """Check if llama-server is running."""
@@ -106,25 +111,6 @@ class LlamaClient:
         except requests.ConnectionError:
             return False
 
-    def list_models(self):
-        """Return a list of available model names."""
-        resp = requests.get(f"{self.base_url}/models", timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        return [m["name"] for m in data.get("models", [])]
-
-    def get_context_length(self, model):
-        """Query the server's context length from /props.
-
-        Returns the context length as an int, or None if unavailable.
-        """
-        try:
-            resp = requests.get(f"{self.base_url}/props", timeout=10)
-            resp.raise_for_status()
-            return int(resp.json()["default_generation_settings"]["n_ctx"])
-        except (requests.ConnectionError, requests.HTTPError, ValueError, KeyError):
-            return None
-
     def _apply_template(self, messages, timeout=30, **body):
         resp = requests.post(
             f"{self.base_url}/apply-template",
@@ -133,6 +119,35 @@ class LlamaClient:
         )
         resp.raise_for_status()
         return resp.json()["prompt"]
+
+    @property
+    def think_tags(self):
+        """The active thinking tags as of the last refresh: (start, end, source) or None."""
+        return self._think_current
+
+    def refresh(self):
+        """Re-read what the server is serving with a single GET /props.
+
+        Updates server_model and server_n_ctx, then the thinking tags from the
+        same response (see detect_think_tags). The previous values are kept
+        when /props cannot be read or lacks a field. Never raises.
+        """
+        try:
+            resp = requests.get(f"{self.base_url}/props", timeout=10)
+            resp.raise_for_status()
+            props = resp.json()
+        except (requests.RequestException, ValueError):
+            return
+        if not isinstance(props, dict):
+            return
+        model = props.get("model_alias") or props.get("model_path")
+        if model:
+            self.server_model = model
+        try:
+            self.server_n_ctx = int(props["default_generation_settings"]["n_ctx"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        self._detect_think_tags(props)
 
     def detect_think_tags(self):
         """Return the active thinking tags as (start, end, source), or None.
@@ -144,17 +159,18 @@ class LlamaClient:
         (server error, unparseable response, failed anchor) keeps the previous
         value. Never raises.
         """
+        self.refresh()
+        return self._think_current
+
+    def _detect_think_tags(self, props):
         if self._think_fixed:
-            return self._think_current
+            return
         try:
-            resp = requests.get(f"{self.base_url}/props", timeout=10)
-            resp.raise_for_status()
-            props = resp.json()
             source = props["chat_template"]
             identity = (props["model_path"], hashlib.sha256(source.encode()).hexdigest())
             if identity in self._think_cache:
                 self._think_current = (*self._think_cache[identity], "detected")
-                return self._think_current
+                return
 
             user = {"role": "user", "content": SENTINEL_USER}
             continuation = self._apply_template(
@@ -172,28 +188,29 @@ class LlamaClient:
             generation = self._apply_template([user])
             status, pair = find_think_tags(continuation, generation, source)
         except (requests.RequestException, ValueError, KeyError, TypeError):
-            return self._think_current
+            return
 
         if status == PAIR:
             self._think_cache[identity] = pair
             self._think_current = (*pair, "detected")
         elif status == NONE:
             self._think_current = None
-        return self._think_current
 
     def chat(self, model, messages, options=None):
         """Send a chat request. Returns a LlamaChatStream that yields tokens.
 
         The server applies the model's chat template (/apply-template); the
-        resulting prompt is then streamed through /completion. The thinking
-        tags are detected first (see detect_think_tags) and attached to the
-        returned stream as .think_tags.
+        resulting prompt is then streamed through /completion. The server's
+        model, context length and thinking tags are re-read first (refresh) and
+        attached to the returned stream as .server_model, .server_n_ctx and
+        .think_tags.
 
         Args:
             options: Dict of model parameters (seed, temperature, top_p).
                      None values are omitted.
         """
-        think = self.detect_think_tags()
+        self.refresh()
+        think = self._think_current
         prompt = self._apply_template(messages, model=model)
         payload = {
             "model": model,
@@ -221,6 +238,8 @@ class LlamaClient:
             prefix = prompt[len(stripped_prompt) - len(think[0]) :]
         stream = LlamaChatStream(resp, prefix=prefix)
         stream.think_tags = think
+        stream.server_model = self.server_model
+        stream.server_n_ctx = self.server_n_ctx
         return stream
 
 
@@ -233,7 +252,8 @@ class LlamaChatStream:
 
     prefix is yielded first (the opening thinking tag the template put in the
     prompt). think_tags is the (start, end, source) used for this request, or
-    None; chat() sets it.
+    None; server_model and server_n_ctx are what the server reported for it
+    (None if unknown). chat() sets all three.
     """
 
     def __init__(self, response, prefix=""):
@@ -241,6 +261,8 @@ class LlamaChatStream:
         self._prefix = prefix
         self.stats = {}
         self.think_tags = None
+        self.server_model = None
+        self.server_n_ctx = None
 
     def __iter__(self):
         if self._prefix:
