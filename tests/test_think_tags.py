@@ -1,10 +1,11 @@
 """Tests for thinking-tag detection (see docs/thinking-tags.md).
 
 Fixtures are real /apply-template renders captured from llama-server where we
-had the model loaded (gpt-oss, DeepSeek-R1-distill, Devstral with the actual
-sentinels; Gemma and Qwen captured earlier with other sentinel words, which are
-substituted textually here). Template sources are short excerpts. Cases with
-"synthetic" in the name are built by hand because no such model was available.
+had the model loaded (gpt-oss, DeepSeek-R1-distill, Devstral, Gemma and Qwen,
+all with the actual sentinels; the Qwen and Gemma renders were re-checked
+against the live servers). Template sources are verbatim excerpts, except where
+a name says "synthetic". Cases with "synthetic" in the name are built by hand
+because no such model was available.
 """
 
 import re
@@ -31,14 +32,25 @@ U, R, A = "QZUSERQZ", "QZREASONQZ", "QZANSWERQZ"
 
 QWEN_CONT = f"<|im_start|>user\n{U}<|im_end|>\n<|im_start|>assistant\n<think>{R}</think>{A}"
 QWEN_GEN = f"<|im_start|>user\n{U}<|im_end|>\n<|im_start|>assistant\n<think>\n"
-# Excerpt of the Qwen template: the forced-open generation prompt and history stripping.
+# Two verbatim excerpts of the Qwen template as served by /props (joined by "..."):
+# the history stripping and the forced-open generation prompt. Captured live.
 QWEN_SRC = (
-    "{%- if '</think>' in content %}{%- set content = content.split('</think>')[-1] | trim %}{%- endif %}"
+    "        {%- if '</think>' in content %}\n"
+    "            {%- set content = content.split('</think>')[-1] | trim %}\n"
+    "        {%- endif %}\n...\n"
+    "    {{- '<|im_start|>assistant\\n<think>\\n' }}"
 )
 
 GEMMA_CONT = f"<|turn>system\n<|think|>\n<turn|>\n<|turn>user\n{U}<turn|>\n<|turn>model\n<|channel>thought\n{R}<channel|>{A}"
 GEMMA_GEN = f"<|turn>system\n<|think|>\n<turn|>\n<|turn>user\n{U}<turn|>\n<|turn>model\n"
-GEMMA_SRC = "synthetic source: {{ '<|channel>thought' }} ..."  # Gemma's real source was never captured
+# Verbatim fragments of Gemma's real template as served by /props (joined by "..."),
+# captured live; they contain the guard words and both tags literally.
+GEMMA_SRC = (
+    "{%- if '<|channel>' in part -%}\n...\n"
+    "{%- for part in text.split('<channel|>') -%}\n...\n"
+    "{{- '<|think|>\\n' -}}\n...\n"
+    "{{- '<|channel>thought\\n' + thinking_text"
+)
 
 GPTOSS_HEAD = (
     "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\n"
