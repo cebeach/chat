@@ -26,6 +26,7 @@ from llama_client import (
     PAIR,
     LlamaClient,
     find_think_tags,
+    is_valid_think_pair,
 )
 
 U, R, A = "QZUSERQZ", "QZREASONQZ", "QZANSWERQZ"
@@ -151,6 +152,34 @@ class FindThinkTagsTests(unittest.TestCase):
         cont = f"[INST]{U}{A}"
         self.check(cont, f"[INST]{U}[INST]", "[/INST] think", (PAIR, ("[INST]", "[/INST]")))
         self.check(cont, f"[INST]{U}[INST]", "think", (NONE, None))
+
+
+class IsValidThinkPairTests(unittest.TestCase):
+    def test_accepts_the_pairs_we_know(self):
+        for pair in [QWEN_PAIR, GEMMA_PAIR, GPTOSS_PAIR, ("[THINK]", "[/THINK]")]:
+            with self.subTest(pair=pair):
+                self.assertTrue(is_valid_think_pair(*pair))
+
+    def test_rejects_empty_whitespace_prose_and_non_strings(self):
+        for pair in [
+            ("", ""),
+            ("<think>", ""),
+            ("", "</think>"),
+            ("a b", "</x>"),  # whitespace inside
+            ("<think>", "so the answer is"),  # prose
+            ("<think>", "Answer:"),  # a label, no marker
+            ("plain", "</think>"),  # does not start with a marker
+            (1, 2),
+            (None, "</x>"),
+            (["<think>"], "</think>"),
+        ]:
+            with self.subTest(pair=pair):
+                self.assertFalse(is_valid_think_pair(*pair))
+
+    def test_length_limits(self):
+        self.assertTrue(is_valid_think_pair("<" + "a" * 58 + ">", "<" + "b" * 78 + ">"))  # 60 and 80
+        self.assertFalse(is_valid_think_pair("<" + "a" * 59 + ">", "</x>"))  # 61
+        self.assertFalse(is_valid_think_pair("<x>", "<" + "b" * 79 + ">"))  # 81
 
 
 class StripWithDetectedPairsTests(unittest.TestCase):

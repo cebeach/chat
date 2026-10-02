@@ -101,9 +101,23 @@ prefix needs it.
 ## Conversations that span models
 
 If you restart the server with another model and keep chatting, earlier replies carry the
-previous model's tags. The app remembers every pair that was active this session and strips all
-of them when saving. A conversation brought in with `/load` that contains tags from a model not
-used in this session keeps them; set the override to cover them.
+previous model's tags. The app remembers every pair it knows this session and strips all of them
+when saving.
+
+Saved files also record the pairs the saving session knew (an optional `think_pairs` list, at
+most the 16 most recent), and `/load` merges them into the session. So loading a conversation
+written by a model this session never ran still lets `save_thinking = false` strip its replies
+when you save again. Pairs read from a file are untrusted: each must have the shape of a tag pair
+(non-empty, a run of markers and plain words, within the length limits) or it is ignored, and the
+session never keeps more than 16.
+
+`/load` applies the whole saved conversation (messages, system prompt and where that prompt came
+from) against the model being served now. The model names recorded in the file, both the
+file-level one and the one on each reply, are information only: they never select a model and are
+never sent to the server, and new replies are attributed to the model served now.
+
+Files saved before the `think_pairs` key existed carry no pairs, so their replies from a model
+this session never ran keep their reasoning when saved again; set the override to cover them.
 
 ## Known limits
 

@@ -9,10 +9,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import chat
 from chat import State, _reply_model, _sync_server_info, handle_command
 from config import DEFAULTS
-from conversation import Conversation
+from conversation import MAX_THINK_PAIRS, Conversation
 from llama_client import LlamaClient
 from tests.test_think_tags import qwen_server, render
 
@@ -145,6 +147,115 @@ class LoadAppliesTheSystemPromptSourceTests(unittest.TestCase):
         data = json.loads((Path(self.tmp) / "again.json").read_text())
         self.assertEqual(data["system_prompt"], "SAVED SYSTEM PROMPT")
         self.assertEqual(data["source_file"], "/home/someone/saved_prompt.txt")
+
+
+QWEN = ("<think>", "</think>")
+GEMMA = ("<|channel>thought", "<channel|>")
+GEMMA_REPLY = "<|channel>thought\nGemma reasoning\n<channel|>Gemma answer"
+
+
+def write_raw(tmp, name, pairs_raw=None, reply=GEMMA_REPLY):
+    """A saved file with arbitrary (even hostile) think_pairs content."""
+    data = {
+        "model": "/m/gemma.gguf",
+        "system_prompt": "",
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "model": "/m/gemma.gguf", "content": reply},
+        ],
+    }
+    if pairs_raw is not None:
+        data["think_pairs"] = pairs_raw
+    (Path(tmp) / f"{name}.json").write_text(json.dumps(data))
+
+
+class LoadMergesRecordedThinkPairsTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+
+    def session(self, seen, save_thinking=True):
+        return State(
+            model="/m/qwen.gguf",
+            config={**DEFAULTS, "conversations_dir": self.tmp, "save_thinking": save_thinking},
+            context_length=4096,
+            think_pairs_seen=list(seen),
+            auto_save_name="auto_t",
+        )
+
+    def load(self, state, name="f", conv=None):
+        conv = conv or Conversation()
+        render(lambda: handle_command("/load", name, None, conv, state))
+        return conv
+
+    def test_a_gemma_conversation_is_stripped_in_a_qwen_only_session(self):
+        # The scenario that used to leave the Gemma reasoning in the re-saved file.
+        gemma_session = Conversation()
+        gemma_session.add_user("q")
+        gemma_session.add_assistant(GEMMA_REPLY, model="/m/gemma.gguf")
+        gemma_session.save(self.tmp, name="f", model="/m/gemma.gguf", think_pairs=[GEMMA])
+
+        state = self.session([QWEN], save_thinking=False)
+        conv = self.load(state)
+        conv.add_user("follow-up")
+        conv.add_assistant("<think>qwen reasoning</think>Qwen answer", model="/m/qwen.gguf")
+        render(lambda: handle_command("/save", "resaved", None, conv, state))
+
+        data = json.loads((Path(self.tmp) / "resaved.json").read_text())
+        replies = [m["content"] for m in data["messages"] if m["role"] == "assistant"]
+        self.assertEqual(replies, ["Gemma answer", "Qwen answer"])
+        self.assertEqual(data["think_pairs"], [list(QWEN), list(GEMMA)])  # the file records both now
+        self.assertEqual(conv.messages[1]["content"], GEMMA_REPLY)  # memory untouched
+
+    def test_pairs_are_added_without_duplicates_even_though_json_gives_lists(self):
+        write_raw(self.tmp, "f", [list(QWEN), list(GEMMA), list(GEMMA)])
+        state = self.session([QWEN])
+        self.load(state)
+        self.assertEqual(state.think_pairs_seen, [QWEN, GEMMA])
+        self.load(state)  # loading again changes nothing
+        self.assertEqual(state.think_pairs_seen, [QWEN, GEMMA])
+
+    def test_invalid_recorded_pairs_are_ignored(self):
+        hostile = [
+            ["", ""],  # would build a degenerate pattern
+            ["a b", "c"],  # whitespace inside
+            ["<x>", "so the answer is"],  # prose
+            ["<" + "x" * 80 + ">", "</x>"],  # too long
+            "not a pair",
+            ["<only-one>"],
+            [1, 2],
+            ["<ok>", "</ok>"],  # the one valid entry
+        ]
+        write_raw(self.tmp, "f", hostile)
+        state = self.session([QWEN])
+        self.load(state)
+        self.assertEqual(state.think_pairs_seen, [QWEN, ("<ok>", "</ok>")])
+
+    def test_the_session_never_keeps_more_than_the_cap(self):
+        write_raw(self.tmp, "f", [[f"<t{i}>", f"</t{i}>"] for i in range(30)])
+        empty = self.session([])
+        self.load(empty)
+        self.assertEqual(len(empty.think_pairs_seen), MAX_THINK_PAIRS)
+        self.assertEqual(empty.think_pairs_seen[0], ("<t0>", "</t0>"))
+        nearly_full = self.session([(f"<s{i}>", f"</s{i}>") for i in range(MAX_THINK_PAIRS - 1)])
+        self.load(nearly_full)
+        self.assertEqual(len(nearly_full.think_pairs_seen), MAX_THINK_PAIRS)  # only one more fit
+
+    def test_an_old_file_without_the_key_changes_nothing(self):
+        write_raw(self.tmp, "f", None)
+        state = self.session([QWEN])
+        conv = self.load(state)
+        self.assertEqual(state.think_pairs_seen, [QWEN])
+        self.assertEqual(len(conv.messages), 2)
+
+    def test_the_toggle_warning_reflects_loaded_pairs(self):
+        write_raw(self.tmp, "f", [list(GEMMA)])
+        state = self.session([])
+        self.load(state)
+        with mock.patch.object(chat, "display_info") as info:
+            handle_command("/config", "save_thinking off", None, Conversation(), state)
+        self.assertIn("earlier replies with known tags still are", info.call_args.args[0])
 
 
 if __name__ == "__main__":

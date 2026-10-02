@@ -9,7 +9,7 @@ import chat
 import ui
 from chat import State, _auto_save, handle_command
 from config import DEFAULTS
-from conversation import Conversation
+from conversation import MAX_THINK_PAIRS, Conversation
 from conversation import strip_think as _strip_think
 
 THINK = "<think>\nreasoning here\n</think>\nThe answer."
@@ -57,6 +57,81 @@ class StripThinkTests(unittest.TestCase):
         # The inner pair is balanced; the outer tags are strays and stay as evidence.
         self.assertEqual(strip_think("<think><think>a</think>b"), "<think>b")
         self.assertEqual(strip_think("<think>x<think>a</think>y</think>"), "<think>xy</think>")
+
+
+class ThinkPairsRecordingTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.conv = Conversation()
+        self.conv.add_user("q")
+        self.conv.add_assistant(THINK)
+
+    def raw(self, name):
+        return json.loads((Path(self.tmp) / f"{name}.json").read_text())
+
+    def test_pairs_are_recorded_whenever_given_even_without_omit_think(self):
+        self.conv.save(self.tmp, name="x", think_pairs=PAIRS)  # omit_think left False
+        data = self.raw("x")
+        self.assertEqual(data["think_pairs"], [["<think>", "</think>"]])
+        self.assertEqual(list(data)[-1], "messages")  # messages stay last
+        self.assertEqual(data["messages"][1]["content"], THINK)  # nothing stripped
+
+    def test_the_key_is_omitted_when_there_are_no_pairs(self):
+        self.conv.save(self.tmp, name="none")
+        self.conv.save(self.tmp, name="empty", think_pairs=[])
+        self.assertNotIn("think_pairs", self.raw("none"))
+        self.assertNotIn("think_pairs", self.raw("empty"))
+
+    def test_at_most_the_most_recent_pairs_are_written(self):
+        pairs = [(f"<t{i}>", f"</t{i}>") for i in range(MAX_THINK_PAIRS + 4)]
+        self.conv.save(self.tmp, name="many", think_pairs=pairs)
+        written = self.raw("many")["think_pairs"]
+        self.assertEqual(len(written), MAX_THINK_PAIRS)
+        self.assertEqual(written[0], ["<t4>", "</t4>"])  # the 4 oldest were dropped
+        self.assertEqual(written[-1], [f"<t{MAX_THINK_PAIRS + 3}>", f"</t{MAX_THINK_PAIRS + 3}>"])
+
+    def test_load_returns_tuples_and_a_resave_round_trips_them(self):
+        self.conv.save(self.tmp, name="x", think_pairs=PAIRS)
+        loaded, _ = Conversation.load(self.tmp, "x")
+        self.assertEqual(loaded.think_pairs, [("<think>", "</think>")])
+        self.assertIsInstance(loaded.think_pairs[0], tuple)
+        loaded.save(self.tmp, name="again", think_pairs=loaded.think_pairs)
+        self.assertEqual(self.raw("again")["think_pairs"], [["<think>", "</think>"]])
+
+    def test_malformed_entries_are_dropped_structurally(self):
+        for name, raw in {
+            "notalist": "<think>",
+            "dict": {"a": "b"},
+            "null": None,
+            "short": [["<think>"]],
+            "long": [["<a>", "</a>", "<b>"]],
+            "nonstr": [[1, 2], ["<a>", None]],
+            "mixed": ["x", ["<ok>", "</ok>"], 5, ["<a>"]],
+        }.items():
+            (Path(self.tmp) / f"{name}.json").write_text(
+                json.dumps({"model": "m", "system_prompt": "", "think_pairs": raw, "messages": []})
+            )
+            with self.subTest(case=name):
+                loaded, _ = Conversation.load(self.tmp, name)
+                expected = [("<ok>", "</ok>")] if name == "mixed" else []
+                self.assertEqual(loaded.think_pairs, expected)
+
+    def test_a_file_without_the_key_loads_exactly_as_before(self):
+        (Path(self.tmp) / "old.json").write_text(
+            json.dumps({"model": "m", "system_prompt": "", "messages": [{"role": "user", "content": "q"}]})
+        )
+        loaded, model = Conversation.load(self.tmp, "old")
+        self.assertEqual((loaded.think_pairs, model, len(loaded.messages)), ([], "m", 1))
+
+    def test_a_loaded_file_never_yields_more_than_the_cap(self):
+        raw = [[f"<t{i}>", f"</t{i}>"] for i in range(1000)]
+        (Path(self.tmp) / "big.json").write_text(
+            json.dumps({"model": "m", "system_prompt": "", "think_pairs": raw, "messages": []})
+        )
+        loaded, _ = Conversation.load(self.tmp, "big")
+        self.assertEqual(len(loaded.think_pairs), MAX_THINK_PAIRS)
 
 
 class SaveTests(unittest.TestCase):

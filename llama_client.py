@@ -38,6 +38,24 @@ NONE = "none"  # conclusive: this model/template has no (acceptable) thinking ta
 INCONCLUSIVE = "inconclusive"  # could not tell; callers keep the previous value
 
 
+def is_valid_think_pair(start, end):
+    """True if (start, end) has the shape of a thinking-tag pair.
+
+    Both must be non-empty strings, a contiguous run of markers and plain words
+    (no whitespace, starting with a marker), within the length limits. Used for
+    detected pairs and for pairs read from a saved file, which is untrusted input:
+    an empty or prose-like pair would build a degenerate strip pattern.
+    """
+    return (
+        isinstance(start, str)
+        and isinstance(end, str)
+        and 0 < len(start) <= _START_MAX
+        and 0 < len(end) <= _END_MAX
+        and _TAG_RE.fullmatch(start) is not None
+        and _TAG_RE.fullmatch(end) is not None
+    )
+
+
 def find_think_tags(continuation, generation, template_source):
     """Infer a model's thinking tags from two /apply-template renders.
 
@@ -71,14 +89,7 @@ def find_think_tags(continuation, generation, template_source):
                 m = _OPENED_MARKER_RE.search(gen)
                 start = m.group(1) if m else ""
             end = between.strip()
-            if (
-                start
-                and len(start) <= _START_MAX
-                and len(end) <= _END_MAX
-                and _TAG_RE.fullmatch(start)
-                and _TAG_RE.fullmatch(end)
-                and _THINK_WORDS_RE.search(template_source)
-            ):
+            if is_valid_think_pair(start, end) and _THINK_WORDS_RE.search(template_source):
                 return PAIR, (start, end)
 
     m = _OPENED_MARKER_RE.search(generation)

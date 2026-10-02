@@ -5,6 +5,13 @@ from datetime import datetime
 from pathlib import Path
 
 
+# Most thinking-tag pairs a session keeps and a saved file records (the most
+# recent ones on save). The same cap on both ends means whatever is written can
+# always be read back, and a hostile file cannot add an unbounded number of
+# strip patterns.
+MAX_THINK_PAIRS = 16
+
+
 @functools.lru_cache(maxsize=None)
 def _pair_regex(start, end):
     # A balanced pair only: neither of its own tags may appear inside it.
@@ -12,6 +19,21 @@ def _pair_regex(start, end):
     # bug upstream and are left in the file as evidence).
     s, e = re.escape(start), re.escape(end)
     return re.compile(rf"{s}(?:(?!{s}|{e}).)*{e}", re.DOTALL)
+
+
+def _read_think_pairs(raw):
+    """Structurally filter the pairs recorded in a file: a list of two-string
+    lists becomes a list of (start, end) tuples (JSON gives lists, and the
+    session compares tuples), at most MAX_THINK_PAIRS of them. Whether a pair
+    has a sensible shape is checked by the caller."""
+    pairs = []
+    if isinstance(raw, list):
+        for entry in raw:
+            if isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry):
+                pairs.append((entry[0], entry[1]))
+                if len(pairs) == MAX_THINK_PAIRS:
+                    break
+    return pairs
 
 
 def strip_think(text, pairs):
@@ -31,6 +53,9 @@ class Conversation:
         self.system_prompt = system_prompt
         self.messages = []
         self.source_file = None
+        # Thinking-tag pairs recorded in a loaded file (see load); information
+        # only, the session decides what to do with them.
+        self.think_pairs = []
 
     def _add(self, role, content, source_file=None, model=None):
         msg = {
@@ -126,6 +151,11 @@ class Conversation:
             omit_think: Drop balanced thinking blocks (for each (start, end) in
                 think_pairs) from assistant messages in the saved file. The
                 in-memory messages are never modified.
+            think_pairs: The (start, end) thinking-tag pairs known to the
+                session. They are used for omit_think and, whenever given, also
+                recorded in the file (at most the MAX_THINK_PAIRS most recent)
+                so a later /load can strip replies written by a model the
+                loading session never ran.
 
         Returns:
             The Path of the saved file.
@@ -145,6 +175,9 @@ class Conversation:
         if self.source_file is not None:
             data["source_file"] = self.source_file
         data["system_prompt"] = self.system_prompt
+        recorded = [list(pair) for pair in list(think_pairs)[-MAX_THINK_PAIRS:]]
+        if recorded:
+            data["think_pairs"] = recorded
         messages = self.messages
         if omit_think and think_pairs:
             messages = [
@@ -178,6 +211,7 @@ class Conversation:
         conv = cls(system_prompt=data.get("system_prompt", ""))
         conv.messages = data.get("messages", [])
         conv.source_file = data.get("source_file")
+        conv.think_pairs = _read_think_pairs(data.get("think_pairs"))
         return conv, data.get("model", "")
 
     @staticmethod

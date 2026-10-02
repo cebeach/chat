@@ -12,8 +12,8 @@ from requests.exceptions import ConnectionError, HTTPError
 from rich.markup import escape
 
 from config import load_config
-from conversation import Conversation
-from llama_client import LlamaClient
+from conversation import MAX_THINK_PAIRS, Conversation
+from llama_client import LlamaClient, is_valid_think_pair
 from ui import (
     console,
     display_assistant_stream,
@@ -49,7 +49,8 @@ class State:
     last_read_file: str | None = None
     # Active thinking tags as (start, end, source), or None. See docs/thinking-tags.md.
     think_tags: tuple | None = None
-    # Every (start, end) pair that was active this session; saves strip all of them.
+    # Every (start, end) pair known this session, active or loaded from a saved
+    # file; saves strip all of them and record them in the file.
     think_pairs_seen: list = field(default_factory=list)
 
 
@@ -175,6 +176,21 @@ def _update_think_tags(state, tags, announce=True):
         )
 
 
+def _merge_think_pairs(state, pairs):
+    """Add the thinking-tag pairs recorded in a loaded file to the session.
+
+    The file is untrusted input, so a pair is used only if it has the shape of
+    a thinking-tag pair; duplicates are skipped and the list never grows past
+    MAX_THINK_PAIRS. This is what lets a later save strip replies written by a
+    model this session never ran.
+    """
+    for pair in pairs:
+        if len(state.think_pairs_seen) >= MAX_THINK_PAIRS:
+            break
+        if pair not in state.think_pairs_seen and is_valid_think_pair(*pair):
+            state.think_pairs_seen.append(pair)
+
+
 def _sync_server_info(state, model, n_ctx, announce=True):
     """Make state.model and state.context_length follow what the server reports.
 
@@ -294,6 +310,9 @@ def handle_command(cmd, args, client, conversation, state):
                 conversation.system_prompt = loaded_conv.system_prompt
                 # Where that system prompt came from (None clears a stale value).
                 conversation.source_file = loaded_conv.source_file
+                # The tag pairs the saving session knew, so this session can strip
+                # the loaded replies even if it never ran those models.
+                _merge_think_pairs(state, loaded_conv.think_pairs)
                 saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
                 display_info(
                     f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
