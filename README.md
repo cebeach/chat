@@ -6,7 +6,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 - **`chat.py`** — Main REPL entry point with slash commands
 - **`config.py`** — Loads `~/.config/chat/config.toml`, merges with defaults
-- **`llama_client.py`** — HTTP client for the llama.cpp server OpenAI-compatible API (`/v1/chat/completions`)
+- **`llama_client.py`** — HTTP client for the llama.cpp server native API (`/apply-template` + `/completion` for chat, `/props`, `/health`)
 - **`conversation.py`** — Message history and system prompt management
 - **`ui.py`** — Rich-based terminal display with streaming output
 - **`conv2txt.py`** — Standalone utility to convert saved conversation JSON to plain text
@@ -20,6 +20,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 - **Config file** — TOML configuration at `~/.config/chat/config.toml`
 - **Save/load conversations** — JSON persistence with tab-completion of saved names; auto-saved on exit
+- **Thinking blocks** — saved conversations keep a model's reasoning by default. Set `save_thinking = false` in the config file, or use `/config save_thinking [on|off]` (no argument toggles) to omit it from saved files (`/save` and auto-save). The tags (`<think>`, `<|channel>thought`, harmony's `<|channel|>analysis<|message|>`, …) are detected from the server for the loaded model, so no tag is hard-coded; `/config` shows them in the `think_tags` row. Only balanced pairs are removed, and the live session always keeps them. If detection finds nothing for your model, set `think_start` and `think_end` in the config file. Details and how to check a new model: [docs/thinking-tags.md](docs/thinking-tags.md).
 - **View conversations** — `/cat <name>` prints a saved conversation; `/conversations` lists all saved conversations
 - **Recall** — `/recall <n>` re-injects an older message pair into the active context window
 - **Retry** — `/retry` regenerates the last response

@@ -12,13 +12,16 @@ CONFIG_DIR = Path.home() / ".config" / "chat"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 DEFAULTS = {
-    "default_model": "",
     "system_prompt": "",
     "llama_url": "http://127.0.0.1:8001",
     "conversations_dir": str(
         Path.home() / ".local" / "share" / "chat" / "conversations"
     ),
     "auto_save": True,
+    "save_thinking": True,
+    # Optional override of the detected thinking tags (both must be non-empty).
+    "think_start": "",
+    "think_end": "",
     "seed": None,
     "temperature": None,
     "top_p": None,

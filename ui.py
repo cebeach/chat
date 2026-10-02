@@ -1,4 +1,5 @@
 import os
+import re
 import readline
 import signal
 import sys
@@ -8,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
@@ -26,8 +28,6 @@ COMMANDS = [
     "/exit",
     "/info",
     "/load",
-    "/model",
-    "/models",
     "/recall",
     "/retry",
     "/save",
@@ -63,14 +63,12 @@ def print_help():
     table.add_column("Description")
     table.add_row("/cat <name>", "Print a saved conversation to the console")
     table.add_row("/clear", "Clear conversation history")
-    table.add_row("/config", "Show current configuration")
+    table.add_row("/config", "Show configuration; '/config save_thinking on|off' controls whether <think> blocks are saved (omit on/off to toggle)")
     table.add_row("/conversations", "List saved conversations")
     table.add_row("/exit", "Quit the application")
     table.add_row("/help", "Show this help message")
     table.add_row("/info", "Show conversation summary statistics")
     table.add_row("/load <name>", "Load a saved conversation")
-    table.add_row("/model <name>", "Switch to a different model")
-    table.add_row("/models", "List available models")
     table.add_row("/read <path>", "Read a text file into the conversation")
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
@@ -80,16 +78,6 @@ def print_help():
     table.add_row("/stats", "Toggle token stats display")
     table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline or a path to a file within the current directory)')
     table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
-    console.print(table)
-
-
-def display_models(models, current_model):
-    table = Table(title="Available Models", show_header=True, header_style="bold")
-    table.add_column("Model")
-    table.add_column("Active")
-    for m in models:
-        marker = "*" if m == current_model else ""
-        table.add_row(m, marker)
     console.print(table)
 
 
@@ -112,15 +100,28 @@ LLAMA_DEFAULTS = {
 }
 
 
-def display_config(config, current_model, options=None):
+def describe_think_tags(think_tags):
+    """Rich-safe text for the active thinking tags, e.g. "<think> … </think> (detected)".
+
+    Tags may contain square brackets ([THINK], [/THINK]), which Rich would parse
+    as markup (an unmatched closing tag raises MarkupError), so they are escaped.
+    """
+    if not think_tags:
+        return "none detected"
+    start, end, source = think_tags
+    return f"{escape(start)} … {escape(end)} ({source})"
+
+
+def display_config(config, current_model, options=None, think_tags=None):
     table = Table(title="Configuration", show_header=True, header_style="bold")
     table.add_column("Setting", style="bold cyan")
     table.add_column("Value")
     table.add_row("model", current_model)
-    table.add_row("default_model", config["default_model"] or "(none)")
     table.add_row("system_prompt", config["system_prompt"] or "(none)")
     table.add_row("llama_url", config["llama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])
+    table.add_row("save_thinking", "on" if config.get("save_thinking", True) else "off")
+    table.add_row("think_tags", describe_think_tags(think_tags))
     if options is not None:
         for key in sorted(options):
             val = options[key]
@@ -151,8 +152,29 @@ def _format_timestamp(iso_str):
         return ""
 
 
-def display_cat_conversation(name, conversation, model):
-    """Print a saved conversation's messages to the console."""
+def separate_thinking(text, ends):
+    """Return text with one "\\n" after each closing thinking tag in `ends`.
+
+    The same rule as ThinkSeparator, for text that is already complete: the
+    newline is added unless one already follows the tag or the text ends there.
+    Empty tags are ignored. Display only; callers keep the stored text.
+    """
+    for end in ends:
+        if end:
+            text = re.sub(re.escape(end) + r"(?=[^\r\n])", lambda m: m.group(0) + "\n", text)
+    return text
+
+
+def display_cat_conversation(name, conversation, model, think_pairs=()):
+    """Print a saved conversation's messages to the console.
+
+    think_pairs are the (start, end) thinking-tag pairs recorded in the file (the
+    caller validates them); a newline is drawn after each closing tag in assistant
+    replies, as in the live REPL. Message text is escaped so that text that merely
+    looks like Rich markup (for example "[/THINK]" or "[/path]") prints literally
+    instead of raising.
+    """
+    ends = [end for _, end in think_pairs]
     console.print()
     console.print(f"[bold]Conversation:[/bold] {name}")
     if model:
@@ -174,10 +196,13 @@ def display_cat_conversation(name, conversation, model):
             pair_index += 1
             console.print(f"[dim]\\[{pair_index}][/dim] [user_label]You:[/user_label]{ts_display}")
         else:
+            model_display = f"  [dim]{escape(msg['model'])}[/dim]" if msg.get("model") else ""
             console.print(
-                f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]{ts_display}"
+                f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]"
+                f"{ts_display}{model_display}"
             )
-        console.print(msg["content"])
+        content = separate_thinking(msg["content"], ends) if msg["role"] == "assistant" else msg["content"]
+        console.print(escape(content))
         console.print()
 
 
@@ -203,8 +228,57 @@ def display_error(msg):
     console.print(f"[error]{msg}[/error]")
 
 
-def display_assistant_stream(token_generator):
+class ThinkSeparator:
+    """Streaming helper: draw a newline after the tag that closes a thinking block.
+
+    Some models (Gemma, gpt-oss) run straight from the closing tag into the
+    answer (`...144.<channel|>144`). feed() takes each streamed piece and returns
+    the text to draw for it: the same piece, with a single "\\n" inserted after
+    the closing tag unless a newline already follows it or the reply ends there.
+    The tag is matched on the accumulated text, so it may arrive split across
+    pieces. This is display only: the caller keeps the reply text unchanged.
+    """
+
+    def __init__(self, end):
+        self.end = end
+        self._tail = ""  # last len(end) - 1 characters seen
+        self._pending = False  # a closing tag ended exactly at the end of the previous piece
+
+    def feed(self, token):
+        if not self.end:
+            return token
+        shown = []
+        if self._pending and token:
+            self._pending = False
+            if token[0] not in "\r\n":
+                shown.append("\n")
+        window = self._tail + token
+        base = len(self._tail)  # where this piece starts inside the window
+        cut = 0  # next index of `token` not yet copied to `shown`
+        i = window.find(self.end, max(0, base - len(self.end) + 1))  # matches ending inside this piece
+        while i != -1:
+            end_at = i + len(self.end)
+            rel = end_at - base
+            shown.append(token[cut:rel])
+            cut = rel
+            if end_at < len(window):
+                if window[end_at] not in "\r\n":
+                    shown.append("\n")
+            else:
+                self._pending = True  # decided by the next piece
+            i = window.find(self.end, end_at)
+        shown.append(token[cut:])
+        keep = len(self.end) - 1
+        self._tail = window[max(0, len(window) - keep) :] if keep > 0 else ""
+        return "".join(shown)
+
+
+def display_assistant_stream(token_generator, think_end=None):
     """Print streamed tokens live with word-wrap.
+
+    think_end is the tag that closes the model's thinking block, if known; a
+    newline is then drawn after it (see ThinkSeparator). The returned text is
+    always exactly what the model produced.
 
     Returns the full response text.
     """
@@ -215,6 +289,7 @@ def display_assistant_stream(token_generator):
     col = 0  # current column position
     word_buf = ""  # incomplete word being accumulated
     visual_lines = 0  # lines emitted (for erasure)
+    separator = ThinkSeparator(think_end) if think_end else None
 
     def _flush_word(word):
         """Write a complete word, wrapping to next line if needed."""
@@ -228,8 +303,8 @@ def display_assistant_stream(token_generator):
 
     try:
         for token in token_generator:
-            full_text += token
-            word_buf += token
+            full_text += token  # the stored reply: never altered
+            word_buf += separator.feed(token) if separator else token  # what is drawn
 
             # Process explicit newlines first
             while "\n" in word_buf:

@@ -9,21 +9,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from requests.exceptions import ConnectionError, HTTPError
+from rich.markup import escape
 
 from config import load_config
-from conversation import Conversation
-from llama_client import LlamaClient
+from conversation import MAX_THINK_PAIRS, Conversation
+from llama_client import LlamaClient, is_valid_think_pair
 from ui import (
     console,
     display_assistant_stream,
     display_cat_conversation,
     display_config,
+    describe_think_tags,
     display_context_warning,
     display_conversation_info,
     display_conversations,
     display_error,
     display_info,
-    display_models,
     display_options,
     display_stats,
     get_multiline_input,
@@ -46,16 +47,15 @@ class State:
     retry_text: str | None = None
     auto_save_name: str = ""
     last_read_file: str | None = None
+    # Active thinking tags as (start, end, source), or None. See docs/thinking-tags.md.
+    think_tags: tuple | None = None
+    # Every (start, end) pair known this session, active or loaded from a saved
+    # file; saves strip all of them and record them in the file.
+    think_pairs_seen: list = field(default_factory=list)
 
 
-def parse_args(config):
-    parser = argparse.ArgumentParser(description="Chat with a model served by llama-server")
-    parser.add_argument(
-        "--model",
-        "-m",
-        default=config["default_model"] or None,
-        help="Model to use (defaults to first available)",
-    )
+def parse_args():
+    parser = argparse.ArgumentParser(description="Chat with the model served by llama-server")
     parser.add_argument(
         "--url",
         default=None,
@@ -112,6 +112,119 @@ def _handle_set(args, state):
             display_error(f"{key} must be {_OPTION_KEYS[key].__name__} (or 'default').")
 
 
+# Boolean settings that /config can toggle for the session, with their defaults.
+_CONFIG_TOGGLES = {"save_thinking": True}
+
+
+def _handle_config(args, state, client=None):
+    """Handle /config: show settings, or toggle/set a boolean setting."""
+    if client is not None:
+        # Re-read the server first so every row (and the toggle warning below)
+        # is current even if the server was restarted since the last turn.
+        client.refresh()
+        _sync_server_info(state, client.server_model, client.server_n_ctx)
+        _update_think_tags(state, client.think_tags)
+    if not args.strip():
+        display_config(state.config, state.model, state.options, state.think_tags)
+        return
+    parts = args.split()
+    key = parts[0]
+    if key not in _CONFIG_TOGGLES:
+        display_error(f"Unknown setting: {key}. Available: {', '.join(sorted(_CONFIG_TOGGLES))}")
+        return
+    if len(parts) == 1:
+        state.config[key] = not state.config.get(key, _CONFIG_TOGGLES[key])
+    elif len(parts) == 2 and parts[1] in ("on", "off"):
+        state.config[key] = parts[1] == "on"
+    else:
+        display_error(f"Usage: /config {key} on|off (no argument toggles)")
+        return
+    msg = f"{key}: {'on' if state.config[key] else 'off'}"
+    if key == "save_thinking" and not state.config[key] and state.think_tags is None:
+        # Do not let a no-op look like it works.
+        msg += " (no thinking tags known for the current model, so its replies will not be stripped"
+        msg += "; earlier replies with known tags still are)" if state.think_pairs_seen else ")"
+    display_info(msg)
+
+
+def _omit_think(state):
+    """True when saved files should drop thinking blocks."""
+    return not state.config.get("save_thinking", _CONFIG_TOGGLES["save_thinking"])
+
+
+def _think_override(config):
+    """The (start, end) override from the config file, or None unless both are set."""
+    start, end = config.get("think_start", ""), config.get("think_end", "")
+    return (start, end) if start and end else None
+
+
+def _update_think_tags(state, tags, announce=True):
+    """Make `tags` the active thinking tags and remember the pair for saving.
+
+    When the pair changes between turns (including to None) one info line says
+    so, because a model swap while save_thinking is already off produces no
+    other signal. The tags are Rich-escaped by describe_think_tags.
+    """
+    changed = (state.think_tags or (None,))[:2] != (tags or (None,))[:2]
+    state.think_tags = tags
+    if tags and tags[:2] not in state.think_pairs_seen:
+        state.think_pairs_seen.append(tags[:2])
+    if changed and announce:
+        text = describe_think_tags(tags)
+        display_info(
+            f"thinking tags: {text}" if tags else "thinking tags: none detected for the current model"
+        )
+
+
+def _merge_think_pairs(state, pairs):
+    """Add the thinking-tag pairs recorded in a loaded file to the session.
+
+    The file is untrusted input, so a pair is used only if it has the shape of
+    a thinking-tag pair; duplicates are skipped and the list never grows past
+    MAX_THINK_PAIRS. This is what lets a later save strip replies written by a
+    model this session never ran.
+    """
+    for pair in pairs:
+        if len(state.think_pairs_seen) >= MAX_THINK_PAIRS:
+            break
+        if pair not in state.think_pairs_seen and is_valid_think_pair(*pair):
+            state.think_pairs_seen.append(pair)
+
+
+def _sync_server_info(state, model, n_ctx, announce=True):
+    """Make state.model and state.context_length follow what the server reports.
+
+    A value of None (not reported, or /props unreadable) leaves the previous one.
+    When the model changes (for example the server was restarted with another
+    one) a single info line says so; the names are Rich-escaped.
+    """
+    old = state.model
+    if n_ctx is not None:
+        state.context_length = n_ctx
+    if model and model != old:
+        state.model = model
+        if announce:
+            ctx = f" (context {state.context_length:,} tokens)" if state.context_length else ""
+            display_info(f"model: {escape(old)} → {escape(model)}{ctx}")
+
+
+def _reply_model(chat_stream, state):
+    """The model that produced a reply: the server's own statement in the final
+    chunk, else (interrupted stream, or no final chunk) the model refreshed just
+    before sending."""
+    return chat_stream.model or state.model
+
+
+def _think_end(state):
+    """The tag that closes the active model's thinking block, or None."""
+    return state.think_tags[1] if state.think_tags else None
+
+
+def _near_context_limit(prompt_tokens, context_length):
+    """True when the prompt uses more than 80% of the model's context window."""
+    return bool(context_length) and prompt_tokens > 0.8 * context_length
+
+
 def handle_command(cmd, args, client, conversation, state):
     """Handle a slash command. Returns True if the REPL should continue."""
     if cmd == "/?":
@@ -125,21 +238,6 @@ def handle_command(cmd, args, client, conversation, state):
     elif cmd == "/clear":
         conversation.clear()
         display_info("Conversation cleared.")
-
-    elif cmd == "/models":
-        try:
-            models = client.list_models()
-            display_models(models, state.model)
-        except (ConnectionError, HTTPError) as e:
-            display_error(f"Failed to list models: {e}")
-
-    elif cmd == "/model":
-        if not args:
-            display_info(f"Current model: {state.model}")
-        else:
-            state.model = args
-            state.context_length = client.get_context_length(args)
-            display_info(f"Switched to model: {args}")
 
     elif cmd == "/system":
         if not args:
@@ -191,7 +289,13 @@ def handle_command(cmd, args, client, conversation, state):
         name = args.strip() or None
         try:
             conv_dir = state.config["conversations_dir"]
-            filepath = conversation.save(conv_dir, name=name, model=state.model)
+            filepath = conversation.save(
+                conv_dir,
+                name=name,
+                model=state.model,
+                omit_think=_omit_think(state),
+                think_pairs=state.think_pairs_seen,
+            )
             display_info(f"Conversation saved: {filepath}")
         except OSError as e:
             display_error(f"Failed to save: {e}")
@@ -204,13 +308,19 @@ def handle_command(cmd, args, client, conversation, state):
             try:
                 conv_dir = state.config["conversations_dir"]
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
+                # Apply the whole saved conversation against the model being served
+                # now. The model names recorded in the file are information only:
+                # they never select a model and are never sent to the server.
                 conversation.messages = loaded_conv.messages
                 conversation.system_prompt = loaded_conv.system_prompt
-                if loaded_model:
-                    state.model = loaded_model
+                # Where that system prompt came from (None clears a stale value).
+                conversation.source_file = loaded_conv.source_file
+                # The tag pairs the saving session knew, so this session can strip
+                # the loaded replies even if it never ran those models.
+                _merge_think_pairs(state, loaded_conv.think_pairs)
+                saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
                 display_info(
-                    f"Loaded conversation: {name} "
-                    f"({len(conversation.messages)} messages, model: {state.model})"
+                    f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
                 )
             except FileNotFoundError:
                 display_error(f"No saved conversation named '{name}'.")
@@ -225,7 +335,11 @@ def handle_command(cmd, args, client, conversation, state):
             try:
                 conv_dir = state.config["conversations_dir"]
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
-                display_cat_conversation(name, loaded_conv, loaded_model)
+                # The pairs recorded in the file draw the same newline after the
+                # closing thinking tag as the live stream (display only; the file is
+                # untrusted, so only well-formed pairs are used).
+                pairs = [p for p in loaded_conv.think_pairs if is_valid_think_pair(*p)]
+                display_cat_conversation(name, loaded_conv, loaded_model, think_pairs=pairs)
             except FileNotFoundError:
                 display_error(f"No saved conversation named '{name}'.")
             except Exception as e:
@@ -298,7 +412,7 @@ def handle_command(cmd, args, client, conversation, state):
             console.print(combined)
 
     elif cmd == "/config":
-        display_config(state.config, state.model, state.options)
+        _handle_config(args, state, client)
 
     elif cmd == "/info":
         display_conversation_info(conversation.summary(), state.last_stats)
@@ -317,16 +431,22 @@ def _auto_save(conversation, state):
         return
     try:
         conv_dir = state.config["conversations_dir"]
-        conversation.save(conv_dir, name=state.auto_save_name, model=state.model)
+        conversation.save(
+            conv_dir,
+            name=state.auto_save_name,
+            model=state.model,
+            omit_think=_omit_think(state),
+            think_pairs=state.think_pairs_seen,
+        )
     except OSError:
         pass
 
 
 def main():
     config = load_config()
-    args = parse_args(config)
+    args = parse_args()
 
-    client = LlamaClient(args.url or config["llama_url"])
+    client = LlamaClient(args.url or config["llama_url"], think_override=_think_override(config))
 
     if not client.is_available():
         display_error(
@@ -334,24 +454,16 @@ def main():
         )
         sys.exit(1)
 
-    # Resolve model
-    model = args.model
-    if not model:
-        try:
-            models = client.list_models()
-        except (ConnectionError, HTTPError) as e:
-            display_error(f"Failed to list models: {e}")
-            sys.exit(1)
-
-        if not models:
-            display_error("No models found. Make sure llama-server is loaded with a model.")
-            sys.exit(1)
-        model = models[0]
+    # The model is whatever the server is serving; it is never chosen here.
+    client.refresh()
+    if not client.server_model:
+        display_error("Failed to read the server's properties (GET /props). Is llama-server fully started?")
+        sys.exit(1)
 
     state = State(
-        model=model,
+        model=client.server_model,
         config=config,
-        context_length=client.get_context_length(model),
+        context_length=client.server_n_ctx,
         options={
             "seed": config["seed"],
             "temperature": config["temperature"],
@@ -360,10 +472,12 @@ def main():
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
         last_read_file=None,
     )
+    # Startup value for /config; no announcement (the /config row covers it).
+    _update_think_tags(state, client.think_tags, announce=False)
     conversation = Conversation(system_prompt=config["system_prompt"])
 
     init_readline(config["conversations_dir"])
-    print_welcome(model)
+    print_welcome(state.model)
 
     # Main REPL
     try:
@@ -422,14 +536,19 @@ def main():
                         messages=conversation.get_messages(),
                         options=state.options,
                     )
-                    response = display_assistant_stream(chat_stream)
-                    conversation.add_assistant(response)
+                    # Before the reply is shown and before any autosave and context
+                    # warning, so they already know this model, its context length
+                    # and its tags.
+                    _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
+                    _update_think_tags(state, chat_stream.think_tags)
+                    response = display_assistant_stream(chat_stream, think_end=_think_end(state))
+                    conversation.add_assistant(response, model=_reply_model(chat_stream, state))
                     state.last_stats = chat_stream.stats
                     if state.show_stats:
                         display_stats(chat_stream.stats)
                     # Context window warning
                     prompt_tokens = chat_stream.stats.get("prompt_tokens", 0)
-                    if state.context_length and prompt_tokens > 0.8 * state.context_length:
+                    if _near_context_limit(prompt_tokens, state.context_length):
                         display_context_warning(prompt_tokens, state.context_length)
                     _auto_save(conversation, state)
                 except KeyboardInterrupt:
