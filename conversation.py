@@ -1,6 +1,17 @@
 import json
+import re
 from datetime import datetime
 from pathlib import Path
+
+# A balanced pair only: no other think tag may appear inside it. Unbalanced or
+# nested tags are deliberately not matched (they indicate a bug upstream).
+_THINK_BLOCK_RE = re.compile(r"<think>(?:(?!</?think>).)*</think>", re.DOTALL)
+
+
+def strip_think(text):
+    """Remove balanced <think>...</think> blocks; leave anything else untouched."""
+    stripped, count = _THINK_BLOCK_RE.subn("", text)
+    return stripped.strip() if count else text
 
 
 class Conversation:
@@ -90,13 +101,15 @@ class Conversation:
             msgs.append({"role": msg["role"], "content": msg["content"]})
         return msgs
 
-    def save(self, conversations_dir, name=None, model=""):
+    def save(self, conversations_dir, name=None, model="", omit_think=False):
         """Save conversation to a JSON file.
 
         Args:
             conversations_dir: Directory to save into (created if missing).
             name: Filename stem. Defaults to a timestamp.
             model: Current model name to store in the file.
+            omit_think: Drop balanced <think> blocks from assistant messages in
+                the saved file. The in-memory messages are never modified.
 
         Returns:
             The Path of the saved file.
@@ -116,7 +129,13 @@ class Conversation:
         if self.source_file is not None:
             data["source_file"] = self.source_file
         data["system_prompt"] = self.system_prompt
-        data["messages"] = self.messages
+        messages = self.messages
+        if omit_think:
+            messages = [
+                {**m, "content": strip_think(m["content"])} if m["role"] == "assistant" else m
+                for m in messages
+            ]
+        data["messages"] = messages
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
 

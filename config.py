@@ -19,6 +19,7 @@ DEFAULTS = {
         Path.home() / ".local" / "share" / "chat" / "conversations"
     ),
     "auto_save": True,
+    "save_thinking": True,
     "seed": None,
     "temperature": None,
     "top_p": None,

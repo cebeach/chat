@@ -112,6 +112,35 @@ def _handle_set(args, state):
             display_error(f"{key} must be {_OPTION_KEYS[key].__name__} (or 'default').")
 
 
+# Boolean settings that /config can toggle for the session, with their defaults.
+_CONFIG_TOGGLES = {"save_thinking": True}
+
+
+def _handle_config(args, state):
+    """Handle /config: show settings, or toggle/set a boolean setting."""
+    if not args.strip():
+        display_config(state.config, state.model, state.options)
+        return
+    parts = args.split()
+    key = parts[0]
+    if key not in _CONFIG_TOGGLES:
+        display_error(f"Unknown setting: {key}. Available: {', '.join(sorted(_CONFIG_TOGGLES))}")
+        return
+    if len(parts) == 1:
+        state.config[key] = not state.config.get(key, _CONFIG_TOGGLES[key])
+    elif len(parts) == 2 and parts[1] in ("on", "off"):
+        state.config[key] = parts[1] == "on"
+    else:
+        display_error(f"Usage: /config {key} [on|off]")
+        return
+    display_info(f"{key}: {'on' if state.config[key] else 'off'}")
+
+
+def _omit_think(state):
+    """True when saved files should drop <think> blocks."""
+    return not state.config.get("save_thinking", _CONFIG_TOGGLES["save_thinking"])
+
+
 def handle_command(cmd, args, client, conversation, state):
     """Handle a slash command. Returns True if the REPL should continue."""
     if cmd == "/?":
@@ -191,7 +220,9 @@ def handle_command(cmd, args, client, conversation, state):
         name = args.strip() or None
         try:
             conv_dir = state.config["conversations_dir"]
-            filepath = conversation.save(conv_dir, name=name, model=state.model)
+            filepath = conversation.save(
+                conv_dir, name=name, model=state.model, omit_think=_omit_think(state)
+            )
             display_info(f"Conversation saved: {filepath}")
         except OSError as e:
             display_error(f"Failed to save: {e}")
@@ -298,7 +329,7 @@ def handle_command(cmd, args, client, conversation, state):
             console.print(combined)
 
     elif cmd == "/config":
-        display_config(state.config, state.model, state.options)
+        _handle_config(args, state)
 
     elif cmd == "/info":
         display_conversation_info(conversation.summary(), state.last_stats)
@@ -317,7 +348,9 @@ def _auto_save(conversation, state):
         return
     try:
         conv_dir = state.config["conversations_dir"]
-        conversation.save(conv_dir, name=state.auto_save_name, model=state.model)
+        conversation.save(
+            conv_dir, name=state.auto_save_name, model=state.model, omit_think=_omit_think(state)
+        )
     except OSError:
         pass
 

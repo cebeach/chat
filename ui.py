@@ -63,7 +63,7 @@ def print_help():
     table.add_column("Description")
     table.add_row("/cat <name>", "Print a saved conversation to the console")
     table.add_row("/clear", "Clear conversation history")
-    table.add_row("/config", "Show current configuration")
+    table.add_row("/config", "Show configuration; '/config save_thinking [on|off]' toggles saving <think> blocks")
     table.add_row("/conversations", "List saved conversations")
     table.add_row("/exit", "Quit the application")
     table.add_row("/help", "Show this help message")
@@ -121,6 +121,7 @@ def display_config(config, current_model, options=None):
     table.add_row("system_prompt", config["system_prompt"] or "(none)")
     table.add_row("llama_url", config["llama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])
+    table.add_row("save_thinking", "on" if config.get("save_thinking", True) else "off")
     if options is not None:
         for key in sorted(options):
             val = options[key]

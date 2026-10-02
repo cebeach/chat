@@ -20,6 +20,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 - **Config file** — TOML configuration at `~/.config/chat/config.toml`
 - **Save/load conversations** — JSON persistence with tab-completion of saved names; auto-saved on exit
+- **Thinking blocks** — saved conversations keep `<think>…</think>` blocks by default. Set `save_thinking = false` in the config file, or use `/config save_thinking [on|off]` (no argument toggles) to omit them from saved files (`/save` and auto-save). Only balanced pairs are removed, and the live session always keeps them.
 - **View conversations** — `/cat <name>` prints a saved conversation; `/conversations` lists all saved conversations
 - **Recall** — `/recall <n>` re-injects an older message pair into the active context window
 - **Retry** — `/retry` regenerates the last response
