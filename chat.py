@@ -220,9 +220,9 @@ def _think_end(state):
     return state.think_tags[1] if state.think_tags else None
 
 
-def _near_context_limit(prompt_tokens, context_length):
-    """True when the prompt uses more than 80% of the model's context window."""
-    return bool(context_length) and prompt_tokens > 0.8 * context_length
+def _near_context_limit(used_tokens, context_length):
+    """True when used_tokens (prompt + generated) exceed 80% of the context window."""
+    return bool(context_length) and used_tokens > 0.8 * context_length
 
 
 def handle_command(cmd, args, client, conversation, state):
@@ -237,6 +237,7 @@ def handle_command(cmd, args, client, conversation, state):
 
     elif cmd == "/clear":
         conversation.clear()
+        state.last_stats = {}
         display_info("Conversation cleared.")
 
     elif cmd == "/system":
@@ -315,6 +316,8 @@ def handle_command(cmd, args, client, conversation, state):
                 conversation.system_prompt = loaded_conv.system_prompt
                 # Where that system prompt came from (None clears a stale value).
                 conversation.source_file = loaded_conv.source_file
+                # Token counts from the previous conversation no longer apply.
+                state.last_stats = {}
                 # The tag pairs the saving session knew, so this session can strip
                 # the loaded replies even if it never ran those models.
                 _merge_think_pairs(state, loaded_conv.think_pairs)
@@ -383,6 +386,7 @@ def handle_command(cmd, args, client, conversation, state):
             conversation.messages.pop()  # remove assistant
             state.retry_text = conversation.messages[-1]["content"]
             conversation.messages.pop()  # remove user (REPL will re-add)
+            state.last_stats = {}
 
     elif cmd == "/read":
         if not args:
@@ -415,7 +419,7 @@ def handle_command(cmd, args, client, conversation, state):
         _handle_config(args, state, client)
 
     elif cmd == "/info":
-        display_conversation_info(conversation.summary(), state.last_stats)
+        display_conversation_info(conversation.summary(), state.last_stats, state.context_length)
 
     else:
         display_error(f"Unknown command: {cmd}. Type /? for available commands.")
@@ -545,11 +549,11 @@ def main():
                     conversation.add_assistant(response, model=_reply_model(chat_stream, state))
                     state.last_stats = chat_stream.stats
                     if state.show_stats:
-                        display_stats(chat_stream.stats)
+                        display_stats(chat_stream.stats, state.context_length)
                     # Context window warning
-                    prompt_tokens = chat_stream.stats.get("prompt_tokens", 0)
-                    if _near_context_limit(prompt_tokens, state.context_length):
-                        display_context_warning(prompt_tokens, state.context_length)
+                    used_tokens = chat_stream.stats.get("context_tokens", 0)
+                    if _near_context_limit(used_tokens, state.context_length):
+                        display_context_warning(used_tokens, state.context_length)
                     _auto_save(conversation, state)
                 except KeyboardInterrupt:
                     console.print()
