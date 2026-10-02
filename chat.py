@@ -287,8 +287,13 @@ def handle_command(cmd, args, client, conversation, state):
             try:
                 conv_dir = state.config["conversations_dir"]
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
+                # Apply the whole saved conversation against the model being served
+                # now. The model names recorded in the file are information only:
+                # they never select a model and are never sent to the server.
                 conversation.messages = loaded_conv.messages
                 conversation.system_prompt = loaded_conv.system_prompt
+                # Where that system prompt came from (None clears a stale value).
+                conversation.source_file = loaded_conv.source_file
                 saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
                 display_info(
                     f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
