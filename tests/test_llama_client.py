@@ -63,6 +63,7 @@ class StreamTests(unittest.TestCase):
             stream.stats,
             {
                 "completion_tokens": 2,
+                "context_tokens": 9,
                 "eval_duration_ns": 50_000_000,
                 "prompt_tokens": 7,
                 "tokens_per_second": 40.0,

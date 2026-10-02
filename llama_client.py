@@ -258,7 +258,8 @@ class LlamaChatStream:
     """Iterable wrapper over a streaming /completion response (SSE).
 
     After iteration, .stats contains completion_tokens, prompt_tokens,
-    eval_duration_ns and (when reported) tokens_per_second, taken from the
+    context_tokens (prompt + completion: the context in use once the reply is
+    done), eval_duration_ns and (when reported) tokens_per_second, taken from the
     server's final chunk. It stays empty if the stream ends without one.
 
     prefix is yielded first (the opening thinking tag the template put in the
@@ -301,10 +302,13 @@ class LlamaChatStream:
 
     def _build_stats(self, final):
         timings = final.get("timings", {})
+        completion_tokens = final.get("tokens_predicted", 0)
+        prompt_tokens = final.get("tokens_evaluated", 0)
         self.stats = {
-            "completion_tokens": final.get("tokens_predicted", 0),
+            "completion_tokens": completion_tokens,
+            "context_tokens": prompt_tokens + completion_tokens,
             "eval_duration_ns": int(timings.get("predicted_ms", 0) * 1e6),
-            "prompt_tokens": final.get("tokens_evaluated", 0),
+            "prompt_tokens": prompt_tokens,
         }
         if timings.get("predicted_per_second"):
             self.stats["tokens_per_second"] = timings["predicted_per_second"]

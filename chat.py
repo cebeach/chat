@@ -220,9 +220,9 @@ def _think_end(state):
     return state.think_tags[1] if state.think_tags else None
 
 
-def _near_context_limit(prompt_tokens, context_length):
-    """True when the prompt uses more than 80% of the model's context window."""
-    return bool(context_length) and prompt_tokens > 0.8 * context_length
+def _near_context_limit(used_tokens, context_length):
+    """True when used_tokens (prompt + generated) exceed 80% of the context window."""
+    return bool(context_length) and used_tokens > 0.8 * context_length
 
 
 def handle_command(cmd, args, client, conversation, state):
@@ -545,11 +545,11 @@ def main():
                     conversation.add_assistant(response, model=_reply_model(chat_stream, state))
                     state.last_stats = chat_stream.stats
                     if state.show_stats:
-                        display_stats(chat_stream.stats)
+                        display_stats(chat_stream.stats, state.context_length)
                     # Context window warning
-                    prompt_tokens = chat_stream.stats.get("prompt_tokens", 0)
-                    if _near_context_limit(prompt_tokens, state.context_length):
-                        display_context_warning(prompt_tokens, state.context_length)
+                    used_tokens = chat_stream.stats.get("context_tokens", 0)
+                    if _near_context_limit(used_tokens, state.context_length):
+                        display_context_warning(used_tokens, state.context_length)
                     _auto_save(conversation, state)
                 except KeyboardInterrupt:
                     console.print()

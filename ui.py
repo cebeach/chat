@@ -75,7 +75,7 @@ def print_help():
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
     table.add_row("/set", "Show model options (seed, temperature, top_p)")
     table.add_row("/set <key> <val>", "Set a model option (or 'default' to reset)")
-    table.add_row("/stats", "Toggle token stats display")
+    table.add_row("/stats", "Toggle token and context stats display")
     table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline or a path to a file within the current directory)')
     table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
     console.print(table)
@@ -353,8 +353,8 @@ def display_context_warning(used, limit):
     console.print(f"[warning]Warning: context window {pct:.0f}% full ({used:,} / {limit:,} tokens)[/warning]")
 
 
-def display_stats(stats):
-    """Display token generation stats in a dim line."""
+def display_stats(stats, context_length=None):
+    """Display token generation stats, and context usage when known, in a dim line."""
     if not stats:
         return
     parts = []
@@ -364,6 +364,9 @@ def display_stats(stats):
         parts.append(f"{stats['tokens_per_second']:.1f} tok/s")
     if "prompt_tokens" in stats:
         parts.append(f"{stats['prompt_tokens']} prompt tokens")
+    if context_length and "context_tokens" in stats:
+        used = stats["context_tokens"]
+        parts.append(f"ctx {used:,} / {context_length:,} ({used / context_length * 100:.1f}%)")
     if parts:
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 
