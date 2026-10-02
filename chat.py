@@ -18,6 +18,7 @@ from ui import (
     display_assistant_stream,
     display_cat_conversation,
     display_config,
+    describe_think_tags,
     display_context_warning,
     display_conversation_info,
     display_conversations,
@@ -46,6 +47,10 @@ class State:
     retry_text: str | None = None
     auto_save_name: str = ""
     last_read_file: str | None = None
+    # Active thinking tags as (start, end, source), or None. See docs/thinking-tags.md.
+    think_tags: tuple | None = None
+    # Every (start, end) pair that was active this session; saves strip all of them.
+    think_pairs_seen: list = field(default_factory=list)
 
 
 def parse_args(config):
@@ -119,7 +124,7 @@ _CONFIG_TOGGLES = {"save_thinking": True}
 def _handle_config(args, state):
     """Handle /config: show settings, or toggle/set a boolean setting."""
     if not args.strip():
-        display_config(state.config, state.model, state.options)
+        display_config(state.config, state.model, state.options, state.think_tags)
         return
     parts = args.split()
     key = parts[0]
@@ -133,12 +138,41 @@ def _handle_config(args, state):
     else:
         display_error(f"Usage: /config {key} on|off (no argument toggles)")
         return
-    display_info(f"{key}: {'on' if state.config[key] else 'off'}")
+    msg = f"{key}: {'on' if state.config[key] else 'off'}"
+    if key == "save_thinking" and not state.config[key] and state.think_tags is None:
+        # Do not let a no-op look like it works.
+        msg += " (no thinking tags known for the current model, so its replies will not be stripped"
+        msg += "; earlier replies with known tags still are)" if state.think_pairs_seen else ")"
+    display_info(msg)
 
 
 def _omit_think(state):
-    """True when saved files should drop <think> blocks."""
+    """True when saved files should drop thinking blocks."""
     return not state.config.get("save_thinking", _CONFIG_TOGGLES["save_thinking"])
+
+
+def _think_override(config):
+    """The (start, end) override from the config file, or None unless both are set."""
+    start, end = config.get("think_start", ""), config.get("think_end", "")
+    return (start, end) if start and end else None
+
+
+def _update_think_tags(state, tags, announce=True):
+    """Make `tags` the active thinking tags and remember the pair for saving.
+
+    When the pair changes between turns (including to None) one info line says
+    so, because a model swap while save_thinking is already off produces no
+    other signal. The tags are Rich-escaped by describe_think_tags.
+    """
+    changed = (state.think_tags or (None,))[:2] != (tags or (None,))[:2]
+    state.think_tags = tags
+    if tags and tags[:2] not in state.think_pairs_seen:
+        state.think_pairs_seen.append(tags[:2])
+    if changed and announce:
+        text = describe_think_tags(tags)
+        display_info(
+            f"thinking tags: {text}" if tags else "thinking tags: none detected for the current model"
+        )
 
 
 def handle_command(cmd, args, client, conversation, state):
@@ -221,7 +255,11 @@ def handle_command(cmd, args, client, conversation, state):
         try:
             conv_dir = state.config["conversations_dir"]
             filepath = conversation.save(
-                conv_dir, name=name, model=state.model, omit_think=_omit_think(state)
+                conv_dir,
+                name=name,
+                model=state.model,
+                omit_think=_omit_think(state),
+                think_pairs=state.think_pairs_seen,
             )
             display_info(f"Conversation saved: {filepath}")
         except OSError as e:
@@ -349,7 +387,11 @@ def _auto_save(conversation, state):
     try:
         conv_dir = state.config["conversations_dir"]
         conversation.save(
-            conv_dir, name=state.auto_save_name, model=state.model, omit_think=_omit_think(state)
+            conv_dir,
+            name=state.auto_save_name,
+            model=state.model,
+            omit_think=_omit_think(state),
+            think_pairs=state.think_pairs_seen,
         )
     except OSError:
         pass
@@ -359,7 +401,7 @@ def main():
     config = load_config()
     args = parse_args(config)
 
-    client = LlamaClient(args.url or config["llama_url"])
+    client = LlamaClient(args.url or config["llama_url"], think_override=_think_override(config))
 
     if not client.is_available():
         display_error(
@@ -393,6 +435,8 @@ def main():
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
         last_read_file=None,
     )
+    # Startup value for /config; no announcement (the /config row covers it).
+    _update_think_tags(state, client.detect_think_tags(), announce=False)
     conversation = Conversation(system_prompt=config["system_prompt"])
 
     init_readline(config["conversations_dir"])
@@ -455,6 +499,9 @@ def main():
                         messages=conversation.get_messages(),
                         options=state.options,
                     )
+                    # Before the reply is shown and before any autosave, so the
+                    # save below already knows this model's tags.
+                    _update_think_tags(state, chat_stream.think_tags)
                     response = display_assistant_stream(chat_stream)
                     conversation.add_assistant(response)
                     state.last_stats = chat_stream.stats

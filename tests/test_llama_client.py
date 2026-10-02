@@ -72,7 +72,9 @@ class PrefixTests(unittest.TestCase):
 
 class ClientTests(unittest.TestCase):
     def setUp(self):
-        self.client = LlamaClient(URL + "/")
+        # The override makes chat() skip detection, so these tests only cover the
+        # chat flow. Detection itself is covered in test_think_tags.py.
+        self.client = LlamaClient(URL + "/", think_override=("<think>", "</think>"))
 
     def test_list_models_uses_native_models_route(self):
         resp = FakeResponse({"models": [{"name": "a"}, {"name": "b"}], "data": []})
@@ -109,6 +111,7 @@ class ClientTests(unittest.TestCase):
         )
         self.assertTrue(second.kwargs["stream"])
         self.assertEqual(list(stream), [])
+        self.assertEqual(stream.think_tags, ("<think>", "</think>", "config"))
 
     def _stream_for_prompt(self, prompt):
         responses = [FakeResponse({"prompt": prompt}), FakeResponse(lines=[sse(content="x", stop=False)])]

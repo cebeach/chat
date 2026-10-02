@@ -20,6 +20,9 @@ DEFAULTS = {
     ),
     "auto_save": True,
     "save_thinking": True,
+    # Optional override of the detected thinking tags (both must be non-empty).
+    "think_start": "",
+    "think_end": "",
     "seed": None,
     "temperature": None,
     "top_p": None,

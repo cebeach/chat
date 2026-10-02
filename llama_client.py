@@ -2,21 +2,101 @@
 
 Only native endpoints are used: /health, /props, /models, /apply-template
 and /completion. See tools/server/README.md in the llama.cpp source.
+
+Thinking tags are discovered from the server, not hard-coded; see
+find_think_tags() and docs/thinking-tags.md.
 """
 
+import hashlib
 import json
 import re
 
 import requests
 
-# Some chat templates end the generation prompt with an opened thinking block,
-# so the model only ever writes the closing tag. See LlamaChatStream.
-_OPEN_THINK_RE = re.compile(r"<think>\s*$")
+# A marker is one tag-shaped token such as <think>, <|channel|> or [THINK].
+_MARK = r"(?:<[^<>\s]+>|\[[^\[\]\s]+\])"
+# A tag is a contiguous run of markers and plain words, e.g. "<|channel>thought"
+# or "<|end|><|start|>assistant<|channel|>final<|message|>".
+_TAG_RE = re.compile(rf"{_MARK}(?:{_MARK}|[A-Za-z0-9_.:-]+)*")
+# The template must mention thinking at all, or the server's family-level guess
+# (e.g. Mistral's [THINK]) is not evidence that this model uses it.
+_THINK_WORDS_RE = re.compile(r"think|reason|thought|analysis|channel", re.I)
+_OPENED_MARKER_RE = re.compile(r"(<[^<>\s]+>|\[[^\[\]\s]+\])\s*$")
+
+_START_MAX = 60
+_END_MAX = 80
+
+# Sentinels used to probe the chat template through /apply-template.
+SENTINEL_USER = "QZUSERQZ"
+SENTINEL_REASONING = "QZREASONQZ"
+SENTINEL_ANSWER = "QZANSWERQZ"
+
+PAIR = "pair"
+NONE = "none"  # conclusive: this model/template has no (acceptable) thinking tags
+INCONCLUSIVE = "inconclusive"  # could not tell; callers keep the previous value
+
+
+def find_think_tags(continuation, generation, template_source):
+    """Infer a model's thinking tags from two /apply-template renders.
+
+    continuation: render of [user, assistant(reasoning, answer)] with
+        add_generation_prompt=false and continue_final_message=true; llama.cpp
+        writes its own derived tags around the reasoning here.
+    generation: render of [user] with add_generation_prompt=true. The user
+        message must be the same as in `continuation`.
+    template_source: the chat template from GET /props.
+
+    Returns (PAIR, (start, end)), (NONE, None) or (INCONCLUSIVE, None).
+    Layer 1 anchors the start tag on the generation prompt, so it is exactly
+    what the model must emit to open its reasoning. Layer 2 is a fallback for
+    templates whose generation prompt ends in an opened marker. See
+    docs/thinking-tags.md for the reasoning behind each rule.
+    """
+    gen = generation.rstrip()
+    anchor_failed = False
+
+    r, a = SENTINEL_REASONING, SENTINEL_ANSWER
+    if r in continuation and a in continuation and continuation.index(r) < continuation.index(a):
+        before = continuation[: continuation.index(r)]
+        between = continuation[continuation.index(r) + len(r) : continuation.index(a)]
+        if not before.startswith(gen):
+            # Cannot tell (e.g. a timestamp changed between the two renders).
+            anchor_failed = True
+        else:
+            start = before[len(gen) :].strip()
+            if not start:
+                # Forced-open template: the prompt already ends with the opener.
+                m = _OPENED_MARKER_RE.search(gen)
+                start = m.group(1) if m else ""
+            end = between.strip()
+            if (
+                start
+                and len(start) <= _START_MAX
+                and len(end) <= _END_MAX
+                and _TAG_RE.fullmatch(start)
+                and _TAG_RE.fullmatch(end)
+                and _THINK_WORDS_RE.search(template_source)
+            ):
+                return PAIR, (start, end)
+
+    m = _OPENED_MARKER_RE.search(generation)
+    if m and m.group(1)[1] != "/":
+        opener = m.group(1)
+        closer = "</" + opener[1:] if opener[0] == "<" else "[/" + opener[1:]
+        if closer in template_source:
+            return PAIR, (opener, closer)
+
+    return (INCONCLUSIVE if anchor_failed else NONE), None
 
 
 class LlamaClient:
-    def __init__(self, base_url="http://127.0.0.1:8001"):
+    def __init__(self, base_url="http://127.0.0.1:8001", think_override=None):
+        """think_override: optional (start, end) from the config file; when set
+        it wins over detection and no server call is made for it."""
         self.base_url = base_url.rstrip("/")
+        self._think_cache = {}  # server identity -> (start, end); accepted pairs only
+        self._think_current = (*think_override, "config") if think_override else None
+        self._think_fixed = bool(think_override)
 
     def is_available(self):
         """Check if llama-server is running."""
@@ -45,23 +125,76 @@ class LlamaClient:
         except (requests.ConnectionError, requests.HTTPError, ValueError, KeyError):
             return None
 
+    def _apply_template(self, messages, timeout=30, **body):
+        resp = requests.post(
+            f"{self.base_url}/apply-template",
+            json={"messages": messages, **body},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()["prompt"]
+
+    def detect_think_tags(self):
+        """Return the active thinking tags as (start, end, source), or None.
+
+        source is "config" or "detected". Accepted pairs are memoized by server
+        identity (model path + template hash) so a restart with another model
+        is noticed; a None result is recomputed on the next call. A conclusive
+        "no thinking tags" result clears the value, while an inconclusive one
+        (server error, unparseable response, failed anchor) keeps the previous
+        value. Never raises.
+        """
+        if self._think_fixed:
+            return self._think_current
+        try:
+            resp = requests.get(f"{self.base_url}/props", timeout=10)
+            resp.raise_for_status()
+            props = resp.json()
+            source = props["chat_template"]
+            identity = (props["model_path"], hashlib.sha256(source.encode()).hexdigest())
+            if identity in self._think_cache:
+                self._think_current = (*self._think_cache[identity], "detected")
+                return self._think_current
+
+            user = {"role": "user", "content": SENTINEL_USER}
+            continuation = self._apply_template(
+                [
+                    user,
+                    {
+                        "role": "assistant",
+                        "reasoning_content": SENTINEL_REASONING,
+                        "content": SENTINEL_ANSWER,
+                    },
+                ],
+                add_generation_prompt=False,
+                continue_final_message=True,
+            )
+            generation = self._apply_template([user])
+            status, pair = find_think_tags(continuation, generation, source)
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            return self._think_current
+
+        if status == PAIR:
+            self._think_cache[identity] = pair
+            self._think_current = (*pair, "detected")
+        elif status == NONE:
+            self._think_current = None
+        return self._think_current
+
     def chat(self, model, messages, options=None):
         """Send a chat request. Returns a LlamaChatStream that yields tokens.
 
         The server applies the model's chat template (/apply-template); the
-        resulting prompt is then streamed through /completion.
+        resulting prompt is then streamed through /completion. The thinking
+        tags are detected first (see detect_think_tags) and attached to the
+        returned stream as .think_tags.
 
         Args:
             options: Dict of model parameters (seed, temperature, top_p).
                      None values are omitted.
         """
-        resp = requests.post(
-            f"{self.base_url}/apply-template",
-            json={"model": model, "messages": messages},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        prompt = resp.json()["prompt"]
+        think = self.detect_think_tags()
+        prompt = self._apply_template(messages, model=model)
         payload = {
             "model": model,
             "prompt": prompt,
@@ -78,8 +211,17 @@ class LlamaClient:
             timeout=120,
         )
         resp.raise_for_status()
-        open_think = _OPEN_THINK_RE.search(prompt)
-        return LlamaChatStream(resp, prefix=open_think.group() if open_think else "")
+
+        # Some templates end the generation prompt with the opened thinking tag,
+        # so the model only writes the closing one. Re-emit the opener so the
+        # reply shows a balanced block.
+        prefix = ""
+        stripped_prompt = prompt.rstrip()
+        if think and stripped_prompt.endswith(think[0]):
+            prefix = prompt[len(stripped_prompt) - len(think[0]) :]
+        stream = LlamaChatStream(resp, prefix=prefix)
+        stream.think_tags = think
+        return stream
 
 
 class LlamaChatStream:
@@ -89,14 +231,16 @@ class LlamaChatStream:
     eval_duration_ns and (when reported) tokens_per_second, taken from the
     server's final chunk. It stays empty if the stream ends without one.
 
-    prefix is yielded first. chat() uses it to emit an opening <think> tag that
-    the template put in the prompt, so the reply shows a balanced block.
+    prefix is yielded first (the opening thinking tag the template put in the
+    prompt). think_tags is the (start, end, source) used for this request, or
+    None; chat() sets it.
     """
 
     def __init__(self, response, prefix=""):
         self._response = response
         self._prefix = prefix
         self.stats = {}
+        self.think_tags = None
 
     def __iter__(self):
         if self._prefix:

@@ -1,17 +1,29 @@
+import functools
 import json
 import re
 from datetime import datetime
 from pathlib import Path
 
-# A balanced pair only: no other think tag may appear inside it. Unbalanced or
-# nested tags are deliberately not matched (they indicate a bug upstream).
-_THINK_BLOCK_RE = re.compile(r"<think>(?:(?!</?think>).)*</think>", re.DOTALL)
+
+@functools.lru_cache(maxsize=None)
+def _pair_regex(start, end):
+    # A balanced pair only: neither of its own tags may appear inside it.
+    # Unbalanced or nested tags are deliberately not matched (they indicate a
+    # bug upstream and are left in the file as evidence).
+    s, e = re.escape(start), re.escape(end)
+    return re.compile(rf"{s}(?:(?!{s}|{e}).)*{e}", re.DOTALL)
 
 
-def strip_think(text):
-    """Remove balanced <think>...</think> blocks; leave anything else untouched."""
-    stripped, count = _THINK_BLOCK_RE.subn("", text)
-    return stripped.strip() if count else text
+def strip_think(text, pairs):
+    """Remove balanced thinking blocks for each (start, end) pair in pairs.
+
+    Anything else is left untouched; with no pairs the text is returned as is.
+    """
+    changed = False
+    for start, end in pairs:
+        text, count = _pair_regex(start, end).subn("", text)
+        changed = changed or count > 0
+    return text.strip() if changed else text
 
 
 class Conversation:
@@ -101,15 +113,16 @@ class Conversation:
             msgs.append({"role": msg["role"], "content": msg["content"]})
         return msgs
 
-    def save(self, conversations_dir, name=None, model="", omit_think=False):
+    def save(self, conversations_dir, name=None, model="", omit_think=False, think_pairs=()):
         """Save conversation to a JSON file.
 
         Args:
             conversations_dir: Directory to save into (created if missing).
             name: Filename stem. Defaults to a timestamp.
             model: Current model name to store in the file.
-            omit_think: Drop balanced <think> blocks from assistant messages in
-                the saved file. The in-memory messages are never modified.
+            omit_think: Drop balanced thinking blocks (for each (start, end) in
+                think_pairs) from assistant messages in the saved file. The
+                in-memory messages are never modified.
 
         Returns:
             The Path of the saved file.
@@ -130,9 +143,9 @@ class Conversation:
             data["source_file"] = self.source_file
         data["system_prompt"] = self.system_prompt
         messages = self.messages
-        if omit_think:
+        if omit_think and think_pairs:
             messages = [
-                {**m, "content": strip_think(m["content"])} if m["role"] == "assistant" else m
+                {**m, "content": strip_think(m["content"], think_pairs)} if m["role"] == "assistant" else m
                 for m in messages
             ]
         data["messages"] = messages

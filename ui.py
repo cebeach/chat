@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
@@ -112,7 +113,19 @@ LLAMA_DEFAULTS = {
 }
 
 
-def display_config(config, current_model, options=None):
+def describe_think_tags(think_tags):
+    """Rich-safe text for the active thinking tags, e.g. "<think> … </think> (detected)".
+
+    Tags may contain square brackets ([THINK], [/THINK]), which Rich would parse
+    as markup (an unmatched closing tag raises MarkupError), so they are escaped.
+    """
+    if not think_tags:
+        return "none detected"
+    start, end, source = think_tags
+    return f"{escape(start)} … {escape(end)} ({source})"
+
+
+def display_config(config, current_model, options=None, think_tags=None):
     table = Table(title="Configuration", show_header=True, header_style="bold")
     table.add_column("Setting", style="bold cyan")
     table.add_column("Value")
@@ -122,6 +135,7 @@ def display_config(config, current_model, options=None):
     table.add_row("llama_url", config["llama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])
     table.add_row("save_thinking", "on" if config.get("save_thinking", True) else "off")
+    table.add_row("think_tags", describe_think_tags(think_tags))
     if options is not None:
         for key in sorted(options):
             val = options[key]

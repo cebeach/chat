@@ -9,9 +9,15 @@ import chat
 import ui
 from chat import State, _auto_save, handle_command
 from config import DEFAULTS
-from conversation import Conversation, strip_think
+from conversation import Conversation
+from conversation import strip_think as _strip_think
 
 THINK = "<think>\nreasoning here\n</think>\nThe answer."
+PAIRS = [("<think>", "</think>")]
+
+
+def strip_think(text):
+    return _strip_think(text, PAIRS)
 
 
 def make_state(tmp, **config):
@@ -20,6 +26,8 @@ def make_state(tmp, **config):
         config={"conversations_dir": str(tmp), "auto_save": True, **config},
         context_length=None,
         auto_save_name="auto_test",
+        think_tags=("<think>", "</think>", "detected"),
+        think_pairs_seen=list(PAIRS),
     )
 
 
@@ -71,7 +79,7 @@ class SaveTests(unittest.TestCase):
 
     def test_omit_think_strips_assistant_only_and_keeps_memory(self):
         before = json.dumps(self.conv.messages)
-        self.conv.save(self.tmp, name="omit", omit_think=True)
+        self.conv.save(self.tmp, name="omit", omit_think=True, think_pairs=PAIRS)
         saved = saved_messages(self.tmp, "omit")
         self.assertEqual(saved[0]["content"], f"keep this {THINK}")  # user message untouched
         self.assertEqual(saved[1]["content"], "The answer.")
@@ -84,11 +92,11 @@ class SaveTests(unittest.TestCase):
         conv = Conversation()
         conv.add_user("q")
         conv.add_assistant("<think>only thoughts</think>")
-        conv.save(self.tmp, name="empty", omit_think=True)
+        conv.save(self.tmp, name="empty", omit_think=True, think_pairs=PAIRS)
         self.assertEqual(saved_messages(self.tmp, "empty")[1]["content"], "")
 
     def test_load_round_trip(self):
-        self.conv.save(self.tmp, name="rt", omit_think=True)
+        self.conv.save(self.tmp, name="rt", omit_think=True, think_pairs=PAIRS)
         loaded, _ = Conversation.load(self.tmp, "rt")
         self.assertEqual(loaded.messages[1]["content"], "The answer.")
 
