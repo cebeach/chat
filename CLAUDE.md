@@ -30,6 +30,10 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Six source fil
 - **`ui.py`** — All terminal I/O via Rich. Streaming display writes raw tokens with word-wrap, then erases and re-renders as Markdown. Readline integration for input history and tab-completion of commands and conversation names.
 - **`conv2txt.py`** — Standalone CLI utility to convert saved conversation JSON to plain text.
 
+### Documentation
+
+`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too.
+
 ### Data flow
 
 User input → `chat.py` REPL → `Conversation.add_user()` → `LlamaClient.chat()` returns `LlamaChatStream` → `ui.display_assistant_stream()` consumes iterator, shows raw tokens, re-renders as Markdown → `Conversation.add_assistant()`.

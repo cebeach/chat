@@ -15,31 +15,26 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 - `requests` — HTTP client for the llama.cpp server
 - `rich` — Terminal formatting and streaming output
+- `ruff` — linting and formatting (development only; listed in `requirements.txt`)
 
 ## Features
 
-- **Config file** — TOML configuration at `~/.config/chat/config.toml`
-- **Save/load conversations** — JSON persistence with tab-completion of saved names; auto-saved on exit
-- **Thinking blocks** — saved conversations keep a model's reasoning by default. Set `save_thinking = false` in the config file, or use `/config save_thinking [on|off]` (no argument toggles) to omit it from saved files (`/save` and auto-save). The tags (`<think>`, `<|channel>thought`, harmony's `<|channel|>analysis<|message|>`, …) are detected from the server for the loaded model, so no tag is hard-coded; `/config` shows them in the `think_tags` row. Only balanced pairs are removed, and the live session always keeps them. If detection finds nothing for your model, set `think_start` and `think_end` in the config file. Details and how to check a new model: [docs/thinking-tags.md](docs/thinking-tags.md).
-- **View conversations** — `/cat <name>` prints a saved conversation; `/conversations` lists all saved conversations
-- **Recall** — `/recall <n>` re-injects an older message pair into the active context window
-- **Retry** — `/retry` regenerates the last response
-- **Input history** — Readline-based history persisted to disk
-- **Word-wrap streaming** — Streamed output wraps at word boundaries instead of breaking mid-word
-- **Token/context stats** — Toggle display of tokens/sec and prompt token counts with `/stats`; warns when context window is nearly full
-- **Model options** — `/set` to view or adjust seed, temperature, and top_p
-- **Conversation info** — `/info` command showing message, word, character, and token counts
-- **Tab-completion** — Slash commands and conversation names for `/load` and `/cat`
-- **Multiline input** — `"""` delimiters for multi-line prompts; Shift+Enter or Alt+Enter inserts a newline without submitting; paste support via bracketed-paste mode
-- **Multiline system prompts** — `/system """` opens the same multiline input mode for setting multi-paragraph system prompts
+- **Local llama.cpp server** — uses whichever model the server is serving; its context window is read from the server
+- **Save/load conversations** — JSON files with tab-completed names; auto-saved after every reply and on exit
+- **Thinking blocks** — kept in saved files by default; `save_thinking = false` or `/config save_thinking [on|off]` omits them. Tags are detected from the server per model; details in [docs/thinking-tags.md](docs/thinking-tags.md)
+- **Files** — `/read <path> ...` sends text files as a message; `/system <file>` loads a system prompt from a file in the current directory (both limited by `read_file_max_kb`, 32 KB by default)
+- **Recall and retry** — `/recall <n>` re-injects an older exchange; `/retry` regenerates the last reply
+- **Stats** — tokens/sec, prompt tokens and context-window usage after each reply (`/stats` toggles), an 80% context warning, and `/info`
+- **Model options** — `/set` for `seed`, `temperature` and `top_p` (session only)
+- **Input** — readline history (`~/.local/share/chat/history`), tab-completion of commands and conversation names, `"""` multiline input, Shift+Enter or Alt+Enter for a newline, bracketed paste
+- **Plain-text export** — `conv2txt.py` converts a saved conversation to text
 
-## Read from file
+## Documentation
 
-- **Command**: `/read <path>`
-- **Description**: Read a UTF‑8 text file into the conversation as a user message.
-- **File size limit**: 32 KB by default (configurable via `read_file_max_kb` in `~/.config/chat/config.toml`).
-- **Error handling**: Non‑existent files, oversized files, or read errors produce a user‑friendly error message.
-
+See the [user guide](docs/user-guide.md): [commands](docs/commands.md),
+[entering text](docs/input.md), [conversations](docs/conversations.md),
+[configuration](docs/configuration.md), [statistics](docs/statistics.md),
+[troubleshooting](docs/troubleshooting.md).
 
 ---
 Built with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
