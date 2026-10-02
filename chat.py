@@ -335,7 +335,11 @@ def handle_command(cmd, args, client, conversation, state):
             try:
                 conv_dir = state.config["conversations_dir"]
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
-                display_cat_conversation(name, loaded_conv, loaded_model)
+                # The pairs recorded in the file draw the same newline after the
+                # closing thinking tag as the live stream (display only; the file is
+                # untrusted, so only well-formed pairs are used).
+                pairs = [p for p in loaded_conv.think_pairs if is_valid_think_pair(*p)]
+                display_cat_conversation(name, loaded_conv, loaded_model, think_pairs=pairs)
             except FileNotFoundError:
                 display_error(f"No saved conversation named '{name}'.")
             except Exception as e:

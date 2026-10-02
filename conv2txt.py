@@ -19,6 +19,7 @@ exceed the requested width.
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -85,6 +86,51 @@ def wrap_block(text: str, width: int) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Thinking-tag pairs recorded by chat.py (this script stays standalone: it must
+# not import the chat modules, so the small checks below mirror
+# llama_client.is_valid_think_pair and ui.separate_thinking; tests keep them in step)
+# ---------------------------------------------------------------------------
+
+_MARK = r"(?:<[^<>\s]+>|\[[^\[\]\s]+\])"
+_TAG_RE = re.compile(rf"{_MARK}(?:{_MARK}|[A-Za-z0-9_.:-]+)*")
+_START_MAX, _END_MAX, _MAX_PAIRS = 60, 80, 16
+
+
+def valid_think_pair(start, end) -> bool:
+    """True if (start, end) has the shape of a thinking-tag pair."""
+    return (
+        isinstance(start, str)
+        and isinstance(end, str)
+        and 0 < len(start) <= _START_MAX
+        and 0 < len(end) <= _END_MAX
+        and _TAG_RE.fullmatch(start) is not None
+        and _TAG_RE.fullmatch(end) is not None
+    )
+
+
+def think_ends(data: dict) -> list[str]:
+    """Closing tags of the well-formed pairs recorded in the file (at most 16)."""
+    raw = data.get("think_pairs")
+    ends: list[str] = []
+    if isinstance(raw, list):
+        for entry in raw:
+            if isinstance(entry, list) and len(entry) == 2 and valid_think_pair(*entry):
+                ends.append(entry[1])
+                if len(ends) == _MAX_PAIRS:
+                    break
+    return ends
+
+
+def separate_thinking(text: str, ends: list[str]) -> str:
+    """One newline after each closing thinking tag, unless a newline already
+    follows it or the text ends there (display only)."""
+    for end in ends:
+        if end:
+            text = re.sub(re.escape(end) + r"(?=[^\r\n])", lambda m: m.group(0) + "\n", text)
+    return text
+
+
 def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
     """Convert a conversation dict to plain text lines.
 
@@ -122,9 +168,12 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
 
     # Message bodies
     messages = data.get("messages", [])
+    ends = think_ends(data)
     for i, msg in enumerate(messages):
         role = msg.get("role", "unknown")
         content = msg.get("content", "")
+        if role == "assistant":
+            content = separate_thinking(content, ends)
         ts = msg.get("timestamp", "")
         source_file = msg.get("source_file")
 

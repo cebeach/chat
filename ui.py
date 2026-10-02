@@ -1,4 +1,5 @@
 import os
+import re
 import readline
 import signal
 import sys
@@ -151,8 +152,29 @@ def _format_timestamp(iso_str):
         return ""
 
 
-def display_cat_conversation(name, conversation, model):
-    """Print a saved conversation's messages to the console."""
+def separate_thinking(text, ends):
+    """Return text with one "\\n" after each closing thinking tag in `ends`.
+
+    The same rule as ThinkSeparator, for text that is already complete: the
+    newline is added unless one already follows the tag or the text ends there.
+    Empty tags are ignored. Display only; callers keep the stored text.
+    """
+    for end in ends:
+        if end:
+            text = re.sub(re.escape(end) + r"(?=[^\r\n])", lambda m: m.group(0) + "\n", text)
+    return text
+
+
+def display_cat_conversation(name, conversation, model, think_pairs=()):
+    """Print a saved conversation's messages to the console.
+
+    think_pairs are the (start, end) thinking-tag pairs recorded in the file (the
+    caller validates them); a newline is drawn after each closing tag in assistant
+    replies, as in the live REPL. Message text is escaped so that text that merely
+    looks like Rich markup (for example "[/THINK]" or "[/path]") prints literally
+    instead of raising.
+    """
+    ends = [end for _, end in think_pairs]
     console.print()
     console.print(f"[bold]Conversation:[/bold] {name}")
     if model:
@@ -179,7 +201,8 @@ def display_cat_conversation(name, conversation, model):
                 f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]"
                 f"{ts_display}{model_display}"
             )
-        console.print(msg["content"])
+        content = separate_thinking(msg["content"], ends) if msg["role"] == "assistant" else msg["content"]
+        console.print(escape(content))
         console.print()
 
 

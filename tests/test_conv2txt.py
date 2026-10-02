@@ -1,6 +1,11 @@
+import ast
+import sys
 import unittest
+from pathlib import Path
 
-from conv2txt import convert
+from conv2txt import convert, separate_thinking, think_ends, valid_think_pair
+from llama_client import is_valid_think_pair
+from ui import separate_thinking as ui_separate_thinking
 
 
 def conversation(*assistant_models):
@@ -40,6 +45,114 @@ class ModelAnnotationTests(unittest.TestCase):
     def test_user_messages_never_get_a_model_line(self):
         text = convert(conversation("a.gguf"))
         self.assertEqual(text.count("[model:"), 1)
+
+
+GEMMA_PAIR = ["<|channel>thought", "<channel|>"]
+
+
+def with_reply(reply, think_pairs=None):
+    data = {
+        "model": "m",
+        "system_prompt": "",
+        "messages": [
+            {"role": "user", "content": "q mentioning <channel|> literally"},
+            {"role": "assistant", "content": reply},
+        ],
+    }
+    if think_pairs is not None:
+        data["think_pairs"] = think_pairs
+    return data
+
+
+class ThinkingSeparationTests(unittest.TestCase):
+    def test_a_newline_is_added_after_a_recorded_closing_tag_and_survives_wrapping(self):
+        text = convert(with_reply("<|channel>thought\nwhy<channel|>The answer.", [GEMMA_PAIR]))
+        self.assertIn("why<channel|>\nThe answer.", text)
+
+    def test_user_messages_are_never_touched(self):
+        text = convert(with_reply("a<channel|>b", [GEMMA_PAIR]))
+        self.assertIn("q mentioning <channel|> literally", text)
+
+    def test_without_an_applicable_pair_the_output_is_exactly_as_before(self):
+        base = convert(with_reply("why<channel|>The answer."))
+        self.assertEqual(convert(with_reply("why<channel|>The answer.", [])), base)
+        self.assertEqual(convert(with_reply("why<channel|>The answer.", [["<think>", "</think>"]])), base)
+        self.assertIn("why<channel|>The answer.", base)
+
+    def test_a_reply_that_already_has_a_newline_or_ends_at_the_tag_is_unchanged(self):
+        pairs = [["<think>", "</think>"]]
+        for reply in ("why</think>\n\nanswer", "only thinking</think>"):
+            with self.subTest(reply=reply):
+                self.assertEqual(convert(with_reply(reply, pairs)), convert(with_reply(reply)))
+
+    def test_malformed_think_pairs_are_ignored(self):
+        base = convert(with_reply("why<channel|>The answer."))
+        for raw in (
+            "<channel|>",
+            {"a": "b"},
+            None,
+            [["the", "The"]],
+            [["", ""]],
+            [["<a>", "so the answer is"]],
+            ["x"],
+            [[1, 2]],
+        ):
+            with self.subTest(raw=raw):
+                data = with_reply("why<channel|>The answer.")
+                data["think_pairs"] = raw
+                self.assertEqual(convert(data), base)
+
+    def test_at_most_sixteen_pairs_are_used(self):
+        raw = [[f"<t{i}>", f"</t{i}>"] for i in range(40)]
+        self.assertEqual(len(think_ends({"think_pairs": raw})), 16)
+
+
+class StandaloneAndParityTests(unittest.TestCase):
+    def test_separate_thinking_agrees_with_the_one_in_ui(self):
+        samples = [
+            ("why<channel|>144", ["<channel|>"]),
+            ("a</think>b</think>\nc</think>", ["</think>"]),
+            ("a<channel|>b</think>c", ["<channel|>", "</think>"]),
+            ("a[/THINK]b", ["[/THINK]"]),
+            ("nothing here", ["<channel|>"]),
+            ("x<channel|>", ["<channel|>", ""]),
+        ]
+        for text, ends in samples:
+            with self.subTest(text=text):
+                self.assertEqual(separate_thinking(text, ends), ui_separate_thinking(text, ends))
+
+    def test_the_pair_check_agrees_with_is_valid_think_pair(self):
+        pairs = [
+            ("<think>", "</think>"),
+            ("<|channel>thought", "<channel|>"),
+            ("<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"),
+            ("[THINK]", "[/THINK]"),
+            ("the", "the"),  # would put a newline after every "the"
+            ("", ""),
+            ("<think>", ""),
+            ("a b", "</x>"),
+            ("<x>", "so the answer is"),
+            ("<x>", "Answer:"),
+            ("<" + "a" * 58 + ">", "<" + "b" * 78 + ">"),  # exactly at the limits
+            ("<" + "a" * 59 + ">", "</x>"),
+            ("<x>", "<" + "b" * 79 + ">"),
+            (1, 2),
+            (None, "</x>"),
+        ]
+        for pair in pairs:
+            with self.subTest(pair=pair):
+                self.assertEqual(valid_think_pair(*pair), is_valid_think_pair(*pair))
+
+    def test_the_script_still_imports_only_the_standard_library(self):
+        tree = ast.parse((Path(__file__).resolve().parent.parent / "conv2txt.py").read_text())
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                imported.add((node.module or "").split(".")[0])
+        self.assertTrue(imported, "expected some imports")
+        self.assertEqual(imported - set(sys.stdlib_module_names), set())
 
 
 if __name__ == "__main__":

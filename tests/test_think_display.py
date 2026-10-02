@@ -7,11 +7,17 @@ must stay exactly what the model produced; only what is drawn changes.
 
 import contextlib
 import io
+import json
+import re
+import tempfile
 import unittest
+from pathlib import Path
 
-from chat import State, _think_end
+import ui
+from chat import State, _think_end, handle_command
 from config import DEFAULTS
-from ui import ThinkSeparator, display_assistant_stream
+from conversation import Conversation
+from ui import ThinkSeparator, display_assistant_stream, separate_thinking
 
 GEMMA_END = "<channel|>"
 GPTOSS_END = "<|end|><|start|>assistant<|channel|>final<|message|>"
@@ -140,6 +146,96 @@ class DisplayAssistantStreamTests(unittest.TestCase):
         drawn, text = draw([words, "<channel|>", "x"], think_end=GEMMA_END)
         self.assertEqual(text, words + "<channel|>x")
         self.assertIn("<channel|>\nx", drawn)
+
+
+class SeparateThinkingTests(unittest.TestCase):
+    def test_adds_a_newline_after_the_tag_unless_one_follows_or_the_text_ends(self):
+        self.assertEqual(separate_thinking("why<channel|>144", [GEMMA_END]), "why<channel|>\n144")
+        self.assertEqual(separate_thinking("why</think>\n\nanswer", ["</think>"]), "why</think>\n\nanswer")
+        self.assertEqual(separate_thinking("why</think>\r\nanswer", ["</think>"]), "why</think>\r\nanswer")
+        self.assertEqual(separate_thinking("why<channel|>", [GEMMA_END]), "why<channel|>")
+
+    def test_every_occurrence_and_every_known_end(self):
+        text = "a<channel|>b</think>c<channel|>d"
+        self.assertEqual(
+            separate_thinking(text, [GEMMA_END, "</think>"]), "a<channel|>\nb</think>\nc<channel|>\nd"
+        )
+
+    def test_empty_ends_and_no_ends_change_nothing(self):
+        self.assertEqual(separate_thinking("a<channel|>b", []), "a<channel|>b")
+        self.assertEqual(separate_thinking("a<channel|>b", [""]), "a<channel|>b")
+
+    def test_tags_with_regex_characters_are_matched_literally(self):
+        self.assertEqual(separate_thinking("a[/THINK]b", ["[/THINK]"]), "a[/THINK]\nb")
+        self.assertEqual(separate_thinking("a<|end|>b", ["<|end|>"]), "a<|end|>\nb")
+
+    def test_streaming_and_static_agree_for_every_chunking(self):
+        samples = [
+            ("why<channel|>144", GEMMA_END),
+            ("a</think>b</think>\nc</think>d</think>", "</think>"),
+            (f"reason{GPTOSS_END}Hi", GPTOSS_END),
+            ("[THINK]t[/THINK]answer", "[/THINK]"),
+            ("no tag here at all", GEMMA_END),
+            ("ends at the tag<channel|>", GEMMA_END),
+        ]
+        for text, end in samples:
+            expected = separate_thinking(text, [end])
+            for size in range(1, len(text) + 1):
+                with self.subTest(text=text, size=size):
+                    self.assertEqual(feed_all(end, chunks(text, size)), expected)
+
+
+def saved_conversation(tmp, think_pairs, with_pairs=True):
+    conv = Conversation()
+    conv.add_user("question mentioning <channel|> literally")
+    conv.add_assistant("<|channel>thought\nwhy<channel|>The answer.", model="/m/gemma.gguf")
+    conv.save(tmp, name="saved", model="/m/gemma.gguf", think_pairs=think_pairs if with_pairs else ())
+
+
+class CatSeparationTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.state = State(model="m", config={**DEFAULTS, "conversations_dir": self.tmp}, context_length=None)
+
+    def cat(self):
+        with ui.console.capture() as cap:
+            handle_command("/cat", "saved", None, Conversation(), self.state)
+        return re.sub(r"\x1b\[[0-9;]*m", "", cap.get())
+
+    def test_assistant_replies_get_the_newline_and_user_messages_do_not(self):
+        saved_conversation(self.tmp, [("<|channel>thought", "<channel|>")])
+        out = self.cat()
+        self.assertIn("why<channel|>\nThe answer.", out)
+        self.assertIn("question mentioning <channel|> literally", out)  # user text untouched
+
+    def test_a_file_without_recorded_pairs_prints_as_before(self):
+        saved_conversation(self.tmp, [], with_pairs=False)
+        self.assertIn("why<channel|>The answer.", self.cat())
+
+    def test_invalid_recorded_pairs_are_ignored(self):
+        saved_conversation(self.tmp, [])
+        path = Path(self.tmp) / "saved.json"
+        data = json.loads(path.read_text())
+        data["think_pairs"] = [["", ""], ["the", "The"], ["<a>", "so the answer is"], "junk", ["<x>"]]
+        path.write_text(json.dumps(data))
+        self.assertIn("why<channel|>The answer.", self.cat())
+
+    def test_saved_text_that_looks_like_markup_prints_literally_instead_of_raising(self):
+        conv = Conversation()
+        conv.add_user("see [/path] please")
+        conv.add_assistant("[THINK]hmm[/THINK]answer [/etc/hosts]", model="/m/x.gguf")
+        conv.save(self.tmp, name="saved", model="/m/x.gguf", think_pairs=[("[THINK]", "[/THINK]")])
+        out = self.cat()
+        self.assertIn("see [/path] please", out)
+        self.assertIn("[THINK]hmm[/THINK]\nanswer [/etc/hosts]", out)  # bracket-style pair separated too
+
+    def test_the_stored_file_never_contains_the_added_newline(self):
+        saved_conversation(self.tmp, [("<|channel>thought", "<channel|>")])
+        self.cat()
+        stored = json.loads((Path(self.tmp) / "saved.json").read_text())["messages"][1]["content"]
+        self.assertEqual(stored, "<|channel>thought\nwhy<channel|>The answer.")
 
 
 class ThinkEndTests(unittest.TestCase):

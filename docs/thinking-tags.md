@@ -119,6 +119,18 @@ never sent to the server, and new replies are attributed to the model served now
 Files saved before the `think_pairs` key existed carry no pairs, so their replies from a model
 this session never ran keep their reasoning when saved again; set the override to cover them.
 
+## Display
+
+Some models (Gemma, gpt-oss) run straight from the closing tag into the answer
+(`…The answer is 144.<channel|>144`); others (Qwen, DeepSeek) already write a blank line after
+it. So the REPL draws one newline after the active model's closing tag, unless a newline already
+follows it or the reply ends there. `/cat` and `conv2txt` do the same for assistant replies, using
+the pairs recorded in the saved file (a file saved without `think_pairs` is shown as it is).
+
+This is display only. The stored reply, the saved JSON, the history sent back to the model and
+strip-on-save never contain the added newline. `/cat` also escapes the text it prints, so a saved
+reply containing something like `[/THINK]` or `[/path]` is shown literally instead of failing.
+
 ## Known limits
 
 - **Asymmetric tags** such as Gemma's work only through Layer 1 (Layer 2 needs a mirror) or the
