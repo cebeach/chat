@@ -205,8 +205,57 @@ def display_error(msg):
     console.print(f"[error]{msg}[/error]")
 
 
-def display_assistant_stream(token_generator):
+class ThinkSeparator:
+    """Streaming helper: draw a newline after the tag that closes a thinking block.
+
+    Some models (Gemma, gpt-oss) run straight from the closing tag into the
+    answer (`...144.<channel|>144`). feed() takes each streamed piece and returns
+    the text to draw for it: the same piece, with a single "\\n" inserted after
+    the closing tag unless a newline already follows it or the reply ends there.
+    The tag is matched on the accumulated text, so it may arrive split across
+    pieces. This is display only: the caller keeps the reply text unchanged.
+    """
+
+    def __init__(self, end):
+        self.end = end
+        self._tail = ""  # last len(end) - 1 characters seen
+        self._pending = False  # a closing tag ended exactly at the end of the previous piece
+
+    def feed(self, token):
+        if not self.end:
+            return token
+        shown = []
+        if self._pending and token:
+            self._pending = False
+            if token[0] not in "\r\n":
+                shown.append("\n")
+        window = self._tail + token
+        base = len(self._tail)  # where this piece starts inside the window
+        cut = 0  # next index of `token` not yet copied to `shown`
+        i = window.find(self.end, max(0, base - len(self.end) + 1))  # matches ending inside this piece
+        while i != -1:
+            end_at = i + len(self.end)
+            rel = end_at - base
+            shown.append(token[cut:rel])
+            cut = rel
+            if end_at < len(window):
+                if window[end_at] not in "\r\n":
+                    shown.append("\n")
+            else:
+                self._pending = True  # decided by the next piece
+            i = window.find(self.end, end_at)
+        shown.append(token[cut:])
+        keep = len(self.end) - 1
+        self._tail = window[max(0, len(window) - keep) :] if keep > 0 else ""
+        return "".join(shown)
+
+
+def display_assistant_stream(token_generator, think_end=None):
     """Print streamed tokens live with word-wrap.
+
+    think_end is the tag that closes the model's thinking block, if known; a
+    newline is then drawn after it (see ThinkSeparator). The returned text is
+    always exactly what the model produced.
 
     Returns the full response text.
     """
@@ -217,6 +266,7 @@ def display_assistant_stream(token_generator):
     col = 0  # current column position
     word_buf = ""  # incomplete word being accumulated
     visual_lines = 0  # lines emitted (for erasure)
+    separator = ThinkSeparator(think_end) if think_end else None
 
     def _flush_word(word):
         """Write a complete word, wrapping to next line if needed."""
@@ -230,8 +280,8 @@ def display_assistant_stream(token_generator):
 
     try:
         for token in token_generator:
-            full_text += token
-            word_buf += token
+            full_text += token  # the stored reply: never altered
+            word_buf += separator.feed(token) if separator else token  # what is drawn
 
             # Process explicit newlines first
             while "\n" in word_buf:

@@ -215,6 +215,11 @@ def _reply_model(chat_stream, state):
     return chat_stream.model or state.model
 
 
+def _think_end(state):
+    """The tag that closes the active model's thinking block, or None."""
+    return state.think_tags[1] if state.think_tags else None
+
+
 def _near_context_limit(prompt_tokens, context_length):
     """True when the prompt uses more than 80% of the model's context window."""
     return bool(context_length) and prompt_tokens > 0.8 * context_length
@@ -532,7 +537,7 @@ def main():
                     # and its tags.
                     _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
                     _update_think_tags(state, chat_stream.think_tags)
-                    response = display_assistant_stream(chat_stream)
+                    response = display_assistant_stream(chat_stream, think_end=_think_end(state))
                     conversation.add_assistant(response, model=_reply_model(chat_stream, state))
                     state.last_stats = chat_stream.stats
                     if state.show_stats:
