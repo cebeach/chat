@@ -192,6 +192,13 @@ def _sync_server_info(state, model, n_ctx, announce=True):
             display_info(f"model: {escape(old)} → {escape(model)}{ctx}")
 
 
+def _reply_model(chat_stream, state):
+    """The model that produced a reply: the server's own statement in the final
+    chunk, else (interrupted stream, or no final chunk) the model refreshed just
+    before sending."""
+    return chat_stream.model or state.model
+
+
 def _near_context_limit(prompt_tokens, context_length):
     """True when the prompt uses more than 80% of the model's context window."""
     return bool(context_length) and prompt_tokens > 0.8 * context_length
@@ -502,7 +509,7 @@ def main():
                     _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
                     _update_think_tags(state, chat_stream.think_tags)
                     response = display_assistant_stream(chat_stream)
-                    conversation.add_assistant(response)
+                    conversation.add_assistant(response, model=_reply_model(chat_stream, state))
                     state.last_stats = chat_stream.stats
                     if state.show_stats:
                         display_stats(chat_stream.stats)

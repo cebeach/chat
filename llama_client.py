@@ -263,6 +263,9 @@ class LlamaChatStream:
         self.think_tags = None
         self.server_model = None
         self.server_n_ctx = None
+        # The model that actually produced the reply, from the final chunk; None
+        # if the stream ended (or was interrupted) before that chunk.
+        self.model = None
 
     def __iter__(self):
         if self._prefix:
@@ -281,6 +284,7 @@ class LlamaChatStream:
             if token:
                 yield token
             if data.get("stop"):
+                self.model = data.get("model")
                 self._build_stats(data)
                 return
 

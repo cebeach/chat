@@ -241,7 +241,9 @@ class FakeServer:
 
     def post(self, url, json=None, **kw):
         if url.endswith("/completion"):
-            return FakeResponse(lines=[b'data: {"content": "x", "stop": false}'])
+            # Like llama-server: only the final chunk names the model that produced the reply.
+            final = f'data: {{"content": "", "stop": true, "model": "{self.model_path}"}}'
+            return FakeResponse(lines=[b'data: {"content": "x", "stop": false}', final.encode()])
         assert url.endswith("/apply-template"), url
         self.template_calls.append(json)
         if self.fail:

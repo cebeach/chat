@@ -174,8 +174,10 @@ def display_cat_conversation(name, conversation, model):
             pair_index += 1
             console.print(f"[dim]\\[{pair_index}][/dim] [user_label]You:[/user_label]{ts_display}")
         else:
+            model_display = f"  [dim]{escape(msg['model'])}[/dim]" if msg.get("model") else ""
             console.print(
-                f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]{ts_display}"
+                f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]"
+                f"{ts_display}{model_display}"
             )
         console.print(msg["content"])
         console.print()

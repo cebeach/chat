@@ -74,6 +74,24 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(list(stream), ["x"])
         self.assertEqual(stream.stats, {})
 
+    def test_records_the_model_named_in_the_final_chunk_only(self):
+        lines = [
+            sse(content="a", stop=False, model="ignored-on-partial-chunks"),
+            sse(content="", stop=True, model="served.gguf"),
+        ]
+        stream = LlamaChatStream(FakeResponse(lines=lines))
+        self.assertIsNone(stream.model)  # nothing known before the stream is read
+        list(stream)
+        self.assertEqual(stream.model, "served.gguf")
+
+    def test_model_stays_none_without_a_final_chunk_or_without_a_model_field(self):
+        interrupted = LlamaChatStream(FakeResponse(lines=[sse(content="x", stop=False, model="m")]))
+        list(interrupted)
+        self.assertIsNone(interrupted.model)
+        no_field = LlamaChatStream(FakeResponse(lines=[sse(content="", stop=True)]))
+        list(no_field)
+        self.assertIsNone(no_field.model)
+
 
 class PrefixTests(unittest.TestCase):
     def test_prefix_is_yielded_first(self):
@@ -171,6 +189,14 @@ class ClientTests(unittest.TestCase):
         with props_patch(), mock.patch("requests.post", side_effect=responses):
             stream = self.client.chat("m", [{"role": "user", "content": "hi"}])
         self.assertEqual((stream.server_model, stream.server_n_ctx), ("served.gguf", 4096))
+
+    def test_chat_stream_reports_the_model_that_produced_the_reply(self):
+        final = sse(content="", stop=True, model="served.gguf")
+        responses = [FakeResponse({"prompt": "p"}), FakeResponse(lines=[final])]
+        with props_patch(), mock.patch("requests.post", side_effect=responses):
+            stream = self.client.chat("some-label", [{"role": "user", "content": "hi"}])
+        list(stream)
+        self.assertEqual(stream.model, "served.gguf")  # not the label we sent
 
     def _stream_for_prompt(self, prompt):
         responses = [FakeResponse({"prompt": prompt}), FakeResponse(lines=[sse(content="x", stop=False)])]

@@ -147,6 +147,10 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
         if source_file:
             lines.append(f"[from: {source_file}]")
 
+        # Which model produced an assistant reply (a conversation can span models)
+        if msg.get("model"):
+            lines.append(f"[model: {msg['model']}]")
+
         # Wrap the content of the message.
         wrapped_content = wrap_block(content, line_length)
         if wrapped_content:

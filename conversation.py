@@ -32,21 +32,24 @@ class Conversation:
         self.messages = []
         self.source_file = None
 
-    def _add(self, role, content, source_file=None):
+    def _add(self, role, content, source_file=None, model=None):
         msg = {
             "role": role,
             "timestamp": datetime.now().isoformat(),
         }
         if source_file is not None:
             msg["source_file"] = source_file
+        if model:
+            msg["model"] = model
         msg["content"] = content  # Add content last
         self.messages.append(msg)
 
     def add_user(self, content, source_file=None):
         self._add("user", content, source_file=source_file)
 
-    def add_assistant(self, content):
-        self._add("assistant", content)
+    def add_assistant(self, content, model=None):
+        """Add an assistant reply; model is the model that produced it, if known."""
+        self._add("assistant", content, model=model)
 
     def clear(self):
         self.messages.clear()

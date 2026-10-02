@@ -12,10 +12,10 @@ from unittest import mock
 
 import chat
 import ui
-from chat import State, _near_context_limit, _sync_server_info, handle_command, parse_args
+from chat import State, _near_context_limit, _reply_model, _sync_server_info, handle_command, parse_args
 from config import DEFAULTS
 from conversation import Conversation
-from llama_client import LlamaClient
+from llama_client import LlamaChatStream, LlamaClient
 from tests.test_think_tags import GEMMA_PAIR, QWEN_PAIR, devstral_server, gemma_server, qwen_server, render
 
 
@@ -154,6 +154,111 @@ class RemovedLegacyTests(unittest.TestCase):
                 chat.main()
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("server's properties", err.call_args.args[0])
+
+
+class ReplyModelTests(unittest.TestCase):
+    def test_the_servers_own_statement_wins(self):
+        state = make_state(model="/m/refreshed.gguf")
+        self.assertEqual(_reply_model(mock.Mock(model="/m/real.gguf"), state), "/m/real.gguf")
+
+    def test_falls_back_to_the_refreshed_model_for_an_interrupted_stream(self):
+        state = make_state(model="/m/refreshed.gguf")
+        interrupted = LlamaChatStream(_FakeStreamResponse([b'data: {"content": "x", "stop": false}']))
+        list(interrupted)
+        self.assertIsNone(interrupted.model)
+        self.assertEqual(_reply_model(interrupted, state), "/m/refreshed.gguf")
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+class AttributionAcrossASwapTests(unittest.TestCase):
+    def test_each_reply_records_the_model_that_wrote_it(self):
+        server = gemma_server()
+        server.n_ctx = 262144
+        client = LlamaClient("http://llama.test")
+        conv = Conversation()
+        with server.patched():
+            client.refresh()
+            state = make_state(model=client.server_model, n_ctx=client.server_n_ctx)
+
+            def turn(text):
+                conv.add_user(text)
+                stream = client.chat(state.model, conv.get_messages(), {})
+                _sync_server_info(state, stream.server_model, stream.server_n_ctx, announce=False)
+                reply = "".join(stream)
+                conv.add_assistant(reply, model=_reply_model(stream, state))
+
+            turn("one")
+            server.become(
+                "/m/qwen.gguf",
+                qwen_server().source,
+                qwen_server().cont,
+                qwen_server().gen,
+                "<real>",
+                n_ctx=131072,
+            )
+            turn("two")
+        assistants = [m for m in conv.messages if m["role"] == "assistant"]
+        self.assertEqual([m["model"] for m in assistants], ["/m/gemma.gguf", "/m/qwen.gguf"])
+        self.assertTrue(all("model" not in m for m in conv.messages if m["role"] == "user"))
+        self.assertEqual(state.model, "/m/qwen.gguf")
+        self.assertEqual(state.context_length, 131072)
+        # What is sent to the server never carries the extra key.
+        self.assertTrue(all(set(m) == {"role", "content"} for m in conv.get_messages()))
+        # The file-level model is now the model served at save time.
+        with tempfile.TemporaryDirectory() as tmp:
+            conv.save(tmp, name="swap", model=state.model)
+            loaded, file_model = Conversation.load(tmp, "swap")
+        self.assertEqual(file_model, "/m/qwen.gguf")
+        self.assertEqual(
+            [m.get("model") for m in loaded.messages], [None, "/m/gemma.gguf", None, "/m/qwen.gguf"]
+        )
+
+
+class PerMessageModelTests(unittest.TestCase):
+    def test_the_model_key_sits_before_content_and_only_on_replies_that_have_one(self):
+        conv = Conversation()
+        conv.add_user("q")
+        conv.add_assistant("a", model="m1")
+        conv.add_assistant("old style")
+        self.assertEqual(list(conv.messages[1]), ["role", "timestamp", "model", "content"])
+        self.assertNotIn("model", conv.messages[0])
+        self.assertNotIn("model", conv.messages[2])
+
+    def test_save_load_round_trip_and_strip_think_preserve_the_model(self):
+        conv = Conversation()
+        conv.add_user("q")
+        conv.add_assistant("<think>t</think>answer", model="m1")
+        with tempfile.TemporaryDirectory() as tmp:
+            conv.save(tmp, name="x", model="last", omit_think=True, think_pairs=[("<think>", "</think>")])
+            loaded, _ = Conversation.load(tmp, "x")
+        self.assertEqual(loaded.messages[1]["model"], "m1")
+        self.assertEqual(loaded.messages[1]["content"], "answer")
+
+    def test_recalled_copies_carry_no_model(self):
+        conv = Conversation()
+        conv.add_user("q")
+        conv.add_assistant("a", model="m1")
+        conv.recall(1)
+        self.assertEqual(set(conv.messages[-1]), {"role", "content"})
+
+
+class CatShowsTheModelTests(unittest.TestCase):
+    def test_assistant_messages_show_their_model_and_old_ones_show_nothing(self):
+        conv = Conversation()
+        conv.add_user("q1")
+        conv.add_assistant("a1", model="[/THINK] odd-name")  # brackets must not break Rich
+        conv.add_user("q2")
+        conv.add_assistant("a2")
+        out = render(lambda: ui.display_cat_conversation("n", conv, "last"))
+        self.assertIn("[/THINK] odd-name", out)
+        self.assertEqual(out.count("odd-name"), 1)
 
 
 class LoadDoesNotChooseTheModelTests(unittest.TestCase):
