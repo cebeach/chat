@@ -6,7 +6,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 - **`chat.py`** — Main REPL entry point with slash commands
 - **`config.py`** — Loads `~/.config/chat/config.toml`, merges with defaults
-- **`llama_client.py`** — HTTP client for the llama.cpp server OpenAI-compatible API (`/v1/chat/completions`)
+- **`llama_client.py`** — HTTP client for the llama.cpp server native API (`/apply-template` + `/completion` for chat, `/props`, `/models`, `/health`)
 - **`conversation.py`** — Message history and system prompt management
 - **`ui.py`** — Rich-based terminal display with streaming output
 - **`conv2txt.py`** — Standalone utility to convert saved conversation JSON to plain text

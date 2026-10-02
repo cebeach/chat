@@ -1,7 +1,17 @@
+"""Client for the llama.cpp server's native HTTP API.
+
+Only native endpoints are used: /health, /props, /models, /apply-template
+and /completion. See tools/server/README.md in the llama.cpp source.
+"""
+
 import json
-import time
+import re
 
 import requests
+
+# Some chat templates end the generation prompt with an opened thinking block,
+# so the model only ever writes the closing tag. See LlamaChatStream.
+_OPEN_THINK_RE = re.compile(r"<think>\s*$")
 
 
 class LlamaClient:
@@ -18,10 +28,10 @@ class LlamaClient:
 
     def list_models(self):
         """Return a list of available model names."""
-        resp = requests.get(f"{self.base_url}/v1/models", timeout=10)
+        resp = requests.get(f"{self.base_url}/models", timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        return [m["id"] for m in data.get("data", [])]
+        return [m["name"] for m in data.get("models", [])]
 
     def get_context_length(self, model):
         """Query the server's context length from /props.
@@ -31,20 +41,30 @@ class LlamaClient:
         try:
             resp = requests.get(f"{self.base_url}/props", timeout=10)
             resp.raise_for_status()
-            return int(resp.json()["n_ctx"])
+            return int(resp.json()["default_generation_settings"]["n_ctx"])
         except (requests.ConnectionError, requests.HTTPError, ValueError, KeyError):
             return None
 
     def chat(self, model, messages, options=None):
         """Send a chat request. Returns a LlamaChatStream that yields tokens.
 
+        The server applies the model's chat template (/apply-template); the
+        resulting prompt is then streamed through /completion.
+
         Args:
             options: Dict of model parameters (seed, temperature, top_p).
                      None values are omitted.
         """
+        resp = requests.post(
+            f"{self.base_url}/apply-template",
+            json={"model": model, "messages": messages},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        prompt = resp.json()["prompt"]
         payload = {
             "model": model,
-            "messages": messages,
+            "prompt": prompt,
             "stream": True,
         }
         if options:
@@ -52,67 +72,58 @@ class LlamaClient:
                 if v is not None:
                     payload[k] = v
         resp = requests.post(
-            f"{self.base_url}/v1/chat/completions",
+            f"{self.base_url}/completion",
             json=payload,
             stream=True,
             timeout=120,
         )
         resp.raise_for_status()
-        return LlamaChatStream(resp)
+        open_think = _OPEN_THINK_RE.search(prompt)
+        return LlamaChatStream(resp, prefix=open_think.group() if open_think else "")
 
 
 class LlamaChatStream:
-    """Iterable wrapper over a streaming llama.cpp chat response (SSE/OpenAI format).
+    """Iterable wrapper over a streaming /completion response (SSE).
 
     After iteration, .stats contains completion_tokens, prompt_tokens,
-    eval_duration_ns and (when measurable) tokens_per_second.
+    eval_duration_ns and (when reported) tokens_per_second, taken from the
+    server's final chunk. It stays empty if the stream ends without one.
+
+    prefix is yielded first. chat() uses it to emit an opening <think> tag that
+    the template put in the prompt, so the reply shows a balanced block.
     """
 
-    def __init__(self, response):
+    def __init__(self, response, prefix=""):
         self._response = response
+        self._prefix = prefix
         self.stats = {}
 
     def __iter__(self):
-        start = time.monotonic()
-        usage = None
-        token_count = 0
-
+        if self._prefix:
+            yield self._prefix
         for line in self._response.iter_lines():
             if not line:
                 continue
             line = line.decode("utf-8") if isinstance(line, bytes) else line
             if not line.startswith("data: "):
                 continue
-            payload = line[6:]
-            if payload == "[DONE]":
-                break
             try:
-                data = json.loads(payload)
+                data = json.loads(line[6:])
             except json.JSONDecodeError:
                 continue
-            token = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+            token = data.get("content", "")
             if token:
                 yield token
-                token_count += 1
-            chunk_usage = data.get("usage")
-            if chunk_usage:
-                usage = chunk_usage
+            if data.get("stop"):
+                self._build_stats(data)
+                return
 
-        elapsed = time.monotonic() - start
-        self._build_stats(elapsed, usage, token_count)
-
-    def _build_stats(self, elapsed_seconds, usage, token_count):
-        if usage:
-            completion_tokens = usage.get("completion_tokens", token_count)
-            prompt_tokens = usage.get("prompt_tokens", 0)
-        else:
-            completion_tokens = token_count
-            prompt_tokens = 0
-
+    def _build_stats(self, final):
+        timings = final.get("timings", {})
         self.stats = {
-            "completion_tokens": completion_tokens,
-            "eval_duration_ns": int(elapsed_seconds * 1e9),
-            "prompt_tokens": prompt_tokens,
+            "completion_tokens": final.get("tokens_predicted", 0),
+            "eval_duration_ns": int(timings.get("predicted_ms", 0) * 1e6),
+            "prompt_tokens": final.get("tokens_evaluated", 0),
         }
-        if completion_tokens and elapsed_seconds > 0:
-            self.stats["tokens_per_second"] = completion_tokens / elapsed_seconds
+        if timings.get("predicted_per_second"):
+            self.stats["tokens_per_second"] = timings["predicted_per_second"]
