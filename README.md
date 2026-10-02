@@ -1,12 +1,11 @@
 # Chat
 
-A Python chat application that provides a terminal-based interface for chatting with local LLMs. Supports [Ollama](https://ollama.com) (`localhost:11434`) and [llama.cpp server](https://github.com/ggml-org/llama.cpp) (`127.0.0.1:8001`) as backends.
+A Python chat application that provides a terminal-based interface for chatting with local LLMs. Talks to a [llama.cpp server](https://github.com/ggml-org/llama.cpp) (`127.0.0.1:8001` by default).
 
 ## Architecture
 
 - **`chat.py`** — Main REPL entry point with slash commands
 - **`config.py`** — Loads `~/.config/chat/config.toml`, merges with defaults
-- **`ollama_client.py`** — HTTP client for the Ollama API (streaming chat, list models, health check)
 - **`llama_client.py`** — HTTP client for the llama.cpp server OpenAI-compatible API (`/v1/chat/completions`)
 - **`conversation.py`** — Message history and system prompt management
 - **`ui.py`** — Rich-based terminal display with streaming output
@@ -14,12 +13,11 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 ## Dependencies
 
-- `requests` — HTTP client for the Ollama API
+- `requests` — HTTP client for the llama.cpp server
 - `rich` — Terminal formatting and streaming output
 
 ## Features
 
-- **Dual backend** — Switch between Ollama and llama.cpp server via `--backend` flag or `backend` config key
 - **Config file** — TOML configuration at `~/.config/chat/config.toml`
 - **Save/load conversations** — JSON persistence with tab-completion of saved names; auto-saved on exit
 - **View conversations** — `/cat <name>` prints a saved conversation; `/conversations` lists all saved conversations

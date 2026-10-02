@@ -64,7 +64,8 @@ class LlamaClient:
 class LlamaChatStream:
     """Iterable wrapper over a streaming llama.cpp chat response (SSE/OpenAI format).
 
-    After iteration, .stats contains token metadata in Ollama-compatible format.
+    After iteration, .stats contains completion_tokens, prompt_tokens,
+    eval_duration_ns and (when measurable) tokens_per_second.
     """
 
     def __init__(self, response):
@@ -102,17 +103,16 @@ class LlamaChatStream:
 
     def _build_stats(self, elapsed_seconds, usage, token_count):
         if usage:
-            eval_count = usage.get("completion_tokens", token_count)
-            prompt_eval_count = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", token_count)
+            prompt_tokens = usage.get("prompt_tokens", 0)
         else:
-            eval_count = token_count
-            prompt_eval_count = 0
+            completion_tokens = token_count
+            prompt_tokens = 0
 
-        eval_duration_ns = int(elapsed_seconds * 1e9)
         self.stats = {
-            "eval_count": eval_count,
-            "eval_duration": eval_duration_ns,
-            "prompt_eval_count": prompt_eval_count,
+            "completion_tokens": completion_tokens,
+            "eval_duration_ns": int(elapsed_seconds * 1e9),
+            "prompt_tokens": prompt_tokens,
         }
-        if eval_count and elapsed_seconds > 0:
-            self.stats["tokens_per_second"] = eval_count / elapsed_seconds
+        if completion_tokens and elapsed_seconds > 0:
+            self.stats["tokens_per_second"] = completion_tokens / elapsed_seconds
