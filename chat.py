@@ -3,6 +3,7 @@
 
 import argparse
 from pathlib import Path
+import shlex
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -278,18 +279,30 @@ def handle_command(cmd, args, client, conversation, state):
 
     elif cmd == "/read":
         if not args:
-            display_error("Usage: /read <path>")
+            display_error("Usage: /read <path> [<path> ...]")
             return True
-        ok, result = _read_file(args, state.config)
-        if ok:
-            # Store content and file path for next loop iteration
-            state.retry_text = result
-            state.last_read_file = str(Path(args).expanduser().resolve())
+        # Support multiple filenames; quote paths containing spaces
+        try:
+            filenames = shlex.split(args)
+        except ValueError as e:
+            display_error(f"Could not parse paths: {e}")
+            return True
+        parts = []
+        read_paths = []
+        for name in filenames:
+            ok, content = _read_file(name, state.config)
+            if not ok:
+                display_error(content)
+                continue
+            parts.append(content)
+            read_paths.append(str(Path(name).expanduser().resolve()))
+        if parts:
+            combined = "\n".join(parts)
+            state.retry_text = combined
+            # Record only the files actually read, comma-separated
+            state.last_read_file = ", ".join(read_paths)
             console.print("User:")
-            console.print(result)
-        else:
-            display_error(result)
-        return True
+            console.print(combined)
 
     elif cmd == "/config":
         display_config(state.config, state.model, state.options)
