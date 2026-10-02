@@ -49,9 +49,9 @@ theme = Theme(
 console = Console(theme=theme)
 
 
-def print_welcome(model, backend="Ollama"):
+def print_welcome(model):
     console.print()
-    console.print(f"[bold]AI Chat[/bold] ({backend})", style="info")
+    console.print("[bold]AI Chat[/bold] (llama.cpp)", style="info")
     console.print(f"Model: [bold]{model}[/bold]")
     console.print("Type [bold]/?[/bold] for commands, [bold]/exit[/bold] to quit.")
     console.print()
@@ -105,10 +105,10 @@ def display_conversations(conversations):
     console.print(table)
 
 
-OLLAMA_DEFAULTS = {
-    "seed": 0,
+LLAMA_DEFAULTS = {
+    "seed": "random",
     "temperature": 0.8,
-    "top_p": 0.9,
+    "top_p": 0.95,
 }
 
 
@@ -119,7 +119,7 @@ def display_config(config, current_model, options=None):
     table.add_row("model", current_model)
     table.add_row("default_model", config["default_model"] or "(none)")
     table.add_row("system_prompt", config["system_prompt"] or "(none)")
-    table.add_row("ollama_url", config["ollama_url"])
+    table.add_row("llama_url", config["llama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])
     if options is not None:
         for key in sorted(options):
@@ -127,7 +127,7 @@ def display_config(config, current_model, options=None):
             if val is not None:
                 table.add_row(key, str(val))
             else:
-                table.add_row(key, f"{OLLAMA_DEFAULTS[key]} [dim](default)[/dim]")
+                table.add_row(key, f"{LLAMA_DEFAULTS[key]} [dim](default)[/dim]")
     console.print(table)
 
 
@@ -190,8 +190,8 @@ def display_conversation_info(summary, last_stats=None):
     table.add_row("Messages", f"{summary['messages']} ({user} you, {asst} AI)")
     table.add_row("Words", f"{summary['words']:,}")
     table.add_row("Characters", f"{summary['characters']:,}")
-    if last_stats and "prompt_eval_count" in last_stats:
-        table.add_row("Prompt tokens", f"{last_stats['prompt_eval_count']:,}")
+    if last_stats and "prompt_tokens" in last_stats:
+        table.add_row("Prompt tokens", f"{last_stats['prompt_tokens']:,}")
     console.print(table)
 
 
@@ -283,12 +283,12 @@ def display_stats(stats):
     if not stats:
         return
     parts = []
-    if "eval_count" in stats:
-        parts.append(f"{stats['eval_count']} tokens")
+    if "completion_tokens" in stats:
+        parts.append(f"{stats['completion_tokens']} tokens")
     if "tokens_per_second" in stats:
         parts.append(f"{stats['tokens_per_second']:.1f} tok/s")
-    if "prompt_eval_count" in stats:
-        parts.append(f"{stats['prompt_eval_count']} prompt tokens")
+    if "prompt_tokens" in stats:
+        parts.append(f"{stats['prompt_tokens']} prompt tokens")
     if parts:
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 
@@ -331,7 +331,7 @@ def save_readline_history():
 
 
 def get_user_input():
-    """Prompt the user for input with ollama-style placeholder.
+    """Prompt the user for input with a placeholder.
 
     Shows: >>> Send a message (/? for help)
     Placeholder is grey and disappears as soon as the user types.

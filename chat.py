@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Chat — a terminal chat application powered by Ollama."""
+"""AI Chat — a terminal chat application powered by the llama.cpp server."""
 
 import argparse
 from pathlib import Path
@@ -13,7 +13,6 @@ from requests.exceptions import ConnectionError, HTTPError
 from config import load_config
 from conversation import Conversation
 from llama_client import LlamaClient
-from ollama_client import OllamaClient
 from ui import (
     console,
     display_assistant_stream,
@@ -50,7 +49,7 @@ class State:
 
 
 def parse_args(config):
-    parser = argparse.ArgumentParser(description="Chat with a local Ollama model")
+    parser = argparse.ArgumentParser(description="Chat with a model served by llama-server")
     parser.add_argument(
         "--model",
         "-m",
@@ -58,15 +57,9 @@ def parse_args(config):
         help="Model to use (defaults to first available)",
     )
     parser.add_argument(
-        "--backend",
-        choices=["ollama", "llama"],
-        default=config["backend"],
-        help="Backend to use: ollama or llama (default: %(default)s)",
-    )
-    parser.add_argument(
         "--url",
         default=None,
-        help="Override server URL",
+        help="Override llama-server URL",
     )
     return parser.parse_args()
 
@@ -333,19 +326,12 @@ def main():
     config = load_config()
     args = parse_args(config)
 
-    if args.backend == "llama":
-        url = args.url or config["llama_url"]
-        client = LlamaClient(url)
-        unavailable_msg = (
-            "Cannot connect to llama-server. Make sure it's running with: llama-server --port 8001 -m <model>"
-        )
-    else:
-        url = args.url or config["ollama_url"]
-        client = OllamaClient(url)
-        unavailable_msg = "Cannot connect to Ollama. Make sure it's running with: ollama serve"
+    client = LlamaClient(args.url or config["llama_url"])
 
     if not client.is_available():
-        display_error(unavailable_msg)
+        display_error(
+            "Cannot connect to llama-server. Make sure it's running with: llama-server --port 8001 -m <model>"
+        )
         sys.exit(1)
 
     # Resolve model
@@ -358,10 +344,7 @@ def main():
             sys.exit(1)
 
         if not models:
-            if args.backend == "llama":
-                display_error("No models found. Make sure llama-server is loaded with a model.")
-            else:
-                display_error("No models found. Pull one first with: ollama pull <model>")
+            display_error("No models found. Make sure llama-server is loaded with a model.")
             sys.exit(1)
         model = models[0]
 
@@ -380,7 +363,7 @@ def main():
     conversation = Conversation(system_prompt=config["system_prompt"])
 
     init_readline(config["conversations_dir"])
-    print_welcome(model, args.backend)
+    print_welcome(model)
 
     # Main REPL
     try:
@@ -445,7 +428,7 @@ def main():
                     if state.show_stats:
                         display_stats(chat_stream.stats)
                     # Context window warning
-                    prompt_tokens = chat_stream.stats.get("prompt_eval_count", 0)
+                    prompt_tokens = chat_stream.stats.get("prompt_tokens", 0)
                     if state.context_length and prompt_tokens > 0.8 * state.context_length:
                         display_context_warning(prompt_tokens, state.context_length)
                     _auto_save(conversation, state)
@@ -453,11 +436,11 @@ def main():
                     console.print()
                     display_info("Response interrupted.")
                 except ConnectionError:
-                    display_error("Lost connection to Ollama. Is it still running?")
+                    display_error("Lost connection to llama-server. Is it still running?")
                     # Remove the unanswered user message
                     conversation.messages.pop()
                 except HTTPError as e:
-                    display_error(f"Ollama error: {e}")
+                    display_error(f"llama-server error: {e}")
                     conversation.messages.pop()
 
             console.print()
