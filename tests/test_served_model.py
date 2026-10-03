@@ -6,9 +6,9 @@ default_model and /load-overwrite paths are gone.
 """
 
 import sys
-import tempfile
-import unittest
 from unittest import mock
+
+import pytest
 
 import chat
 import ui
@@ -16,7 +16,7 @@ from chat import State, _near_context_limit, _reply_model, _sync_server_info, ha
 from config import DEFAULTS
 from conversation import Conversation
 from llama_client import LlamaChatStream, LlamaClient
-from tests.test_think_tags import GEMMA_PAIR, QWEN_PAIR, devstral_server, gemma_server, qwen_server, render
+from tests.helpers import GEMMA_PAIR, QWEN_PAIR, devstral_server, gemma_server, qwen_server, render
 
 
 def make_state(model="/m/gemma.gguf", n_ctx=262144, tags=(*GEMMA_PAIR, "detected"), **kw):
@@ -27,52 +27,52 @@ def make_state(model="/m/gemma.gguf", n_ctx=262144, tags=(*GEMMA_PAIR, "detected
     )
 
 
-class SyncServerInfoTests(unittest.TestCase):
+class TestSyncServerInfo:
     def test_follows_the_server_and_announces_a_model_change_once(self):
         state = make_state()
         out = render(lambda: _sync_server_info(state, "/m/qwen.gguf", 131072))
-        self.assertEqual((state.model, state.context_length), ("/m/qwen.gguf", 131072))
-        self.assertIn("model: /m/gemma.gguf → /m/qwen.gguf (context 131,072 tokens)", out)
-        self.assertEqual(render(lambda: _sync_server_info(state, "/m/qwen.gguf", 131072)), "")
+        assert (state.model, state.context_length) == ("/m/qwen.gguf", 131072)
+        assert "model: /m/gemma.gguf → /m/qwen.gguf (context 131,072 tokens)" in out
+        assert render(lambda: _sync_server_info(state, "/m/qwen.gguf", 131072)) == ""
 
     def test_no_announcement_at_startup_or_without_a_model_change(self):
         state = make_state()
-        self.assertEqual(render(lambda: _sync_server_info(state, "/m/other.gguf", 4096, announce=False)), "")
-        self.assertEqual(state.model, "/m/other.gguf")
+        assert render(lambda: _sync_server_info(state, "/m/other.gguf", 4096, announce=False)) == ""
+        assert state.model == "/m/other.gguf"
         # same model, new context length (server restarted with another --ctx-size): updated silently
-        self.assertEqual(render(lambda: _sync_server_info(state, "/m/other.gguf", 8192)), "")
-        self.assertEqual(state.context_length, 8192)
+        assert render(lambda: _sync_server_info(state, "/m/other.gguf", 8192)) == ""
+        assert state.context_length == 8192
 
     def test_unknown_values_never_overwrite_what_is_known(self):
         state = make_state()
-        self.assertEqual(render(lambda: _sync_server_info(state, None, None)), "")
-        self.assertEqual(render(lambda: _sync_server_info(state, "", None)), "")
-        self.assertEqual((state.model, state.context_length), ("/m/gemma.gguf", 262144))
+        assert render(lambda: _sync_server_info(state, None, None)) == ""
+        assert render(lambda: _sync_server_info(state, "", None)) == ""
+        assert (state.model, state.context_length) == ("/m/gemma.gguf", 262144)
 
     def test_names_with_square_brackets_are_shown_intact_and_do_not_raise(self):
         state = make_state(model="[a] old")
         out = render(lambda: _sync_server_info(state, "[/THINK] new", 10))
-        self.assertIn("model: [a] old → [/THINK] new (context 10 tokens)", out)
+        assert "model: [a] old → [/THINK] new (context 10 tokens)" in out
 
 
-class ContextLimitTests(unittest.TestCase):
+class TestContextLimit:
     def test_threshold_is_80_percent_of_the_current_context(self):
-        self.assertFalse(_near_context_limit(209715, 262144))
-        self.assertTrue(_near_context_limit(209716, 262144))
-        self.assertFalse(_near_context_limit(0, 262144))
+        assert not _near_context_limit(209715, 262144)
+        assert _near_context_limit(209716, 262144)
+        assert not _near_context_limit(0, 262144)
 
     def test_after_a_swap_to_a_smaller_context_the_same_prompt_now_warns(self):
         # The case the stale value got wrong: 150000 tokens is fine for 262144
         # but over the limit for 131072.
-        self.assertFalse(_near_context_limit(150000, 262144))
-        self.assertTrue(_near_context_limit(150000, 131072))
+        assert not _near_context_limit(150000, 262144)
+        assert _near_context_limit(150000, 131072)
 
     def test_unknown_context_never_warns(self):
-        self.assertFalse(_near_context_limit(10**9, None))
-        self.assertFalse(_near_context_limit(10**9, 0))
+        assert not _near_context_limit(10**9, None)
+        assert not _near_context_limit(10**9, 0)
 
 
-class ConfigRefreshTests(unittest.TestCase):
+class TestConfigRefresh:
     def test_config_refreshes_the_model_and_tags_and_announces_a_swap_once(self):
         server = qwen_server()
         server.n_ctx = 131072
@@ -81,14 +81,14 @@ class ConfigRefreshTests(unittest.TestCase):
         with server.patched():
             out = render(lambda: handle_command("/config", "", client, Conversation(), state))
             again = render(lambda: handle_command("/config", "", client, Conversation(), state))
-        self.assertEqual((state.model, state.context_length), ("/m/qwen.gguf", 131072))
-        self.assertEqual(state.think_tags, (*QWEN_PAIR, "detected"))
-        self.assertIn("model: /m/gemma.gguf → /m/qwen.gguf (context 131,072 tokens)", out)
-        self.assertIn("thinking tags: <think> … </think> (detected)", out)
-        self.assertIn("/m/qwen.gguf", out)
-        self.assertNotIn("→", again)  # the swap was already announced
-        self.assertNotIn("thinking tags:", again)
-        self.assertEqual(state.think_pairs_seen, [GEMMA_PAIR, QWEN_PAIR])
+        assert (state.model, state.context_length) == ("/m/qwen.gguf", 131072)
+        assert state.think_tags == (*QWEN_PAIR, "detected")
+        assert "model: /m/gemma.gguf → /m/qwen.gguf (context 131,072 tokens)" in out
+        assert "thinking tags: <think> … </think> (detected)" in out
+        assert "/m/qwen.gguf" in out
+        assert "→" not in again  # the swap was already announced
+        assert "thinking tags:" not in again
+        assert state.think_pairs_seen == [GEMMA_PAIR, QWEN_PAIR]
 
     def test_the_toggle_warning_uses_the_refreshed_tags(self):
         # The state still holds a Gemma pair, but the server now serves a model
@@ -98,7 +98,7 @@ class ConfigRefreshTests(unittest.TestCase):
         with devstral_server().patched(), mock.patch.object(chat, "display_info") as info:
             handle_command("/config", "save_thinking off", client, Conversation(), state)
         warning = info.call_args_list[-1].args[0]
-        self.assertIn("will not be stripped", warning)
+        assert "will not be stripped" in warning
 
     def test_a_server_that_cannot_be_read_leaves_the_state_alone(self):
         server = gemma_server()
@@ -107,39 +107,39 @@ class ConfigRefreshTests(unittest.TestCase):
         server.fail = True
         with server.patched():
             out = render(lambda: handle_command("/config", "", client, Conversation(), state))
-        self.assertEqual((state.model, state.context_length), ("/m/gemma.gguf", 262144))
-        self.assertNotIn("→", out)
+        assert (state.model, state.context_length) == ("/m/gemma.gguf", 262144)
+        assert "→" not in out
 
 
-class RemovedLegacyTests(unittest.TestCase):
+class TestRemovedLegacy:
     def run_cmd(self, cmd, args=""):
         with mock.patch.object(chat, "display_error") as err:
             handle_command(cmd, args, None, Conversation(), make_state())
         return err
 
-    def test_model_and_models_are_unknown_commands(self):
+    def test_model_and_models_are_unknown_commands(self, subtests):
         for cmd in ("/model", "/models"):
-            with self.subTest(cmd=cmd):
+            with subtests.test(cmd=cmd):
                 err = self.run_cmd(cmd, "x")
-                self.assertIn("Unknown command", err.call_args.args[0])
+                assert "Unknown command" in err.call_args.args[0]
 
     def test_they_are_gone_from_completion_and_help(self):
-        self.assertNotIn("/model", ui.COMMANDS)
-        self.assertNotIn("/models", ui.COMMANDS)
+        assert "/model" not in ui.COMMANDS
+        assert "/models" not in ui.COMMANDS
         out = render(ui.print_help)
-        self.assertNotIn("/model", out)
-        self.assertNotIn("List available models", out)
+        assert "/model" not in out
+        assert "List available models" not in out
 
-    def test_the_model_flag_is_gone(self):
+    def test_the_model_flag_is_gone(self, subtests):
         for argv in (["chat.py", "--model", "x"], ["chat.py", "-m", "x"]):
-            with self.subTest(argv=argv), mock.patch.object(sys, "argv", argv), mock.patch("sys.stderr"):
-                with self.assertRaises(SystemExit):
+            with subtests.test(argv=argv), mock.patch.object(sys, "argv", argv), mock.patch("sys.stderr"):
+                with pytest.raises(SystemExit):
                     parse_args()
         with mock.patch.object(sys, "argv", ["chat.py", "--url", "http://h:1"]):
-            self.assertEqual(parse_args().url, "http://h:1")
+            assert parse_args().url == "http://h:1"
 
     def test_default_model_is_no_longer_a_setting(self):
-        self.assertNotIn("default_model", DEFAULTS)
+        assert "default_model" not in DEFAULTS
 
     def test_main_exits_when_the_server_properties_cannot_be_read(self):
         fake = mock.Mock(server_model=None, server_n_ctx=None, think_tags=None)
@@ -150,23 +150,23 @@ class RemovedLegacyTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["chat.py"]),
             mock.patch.object(chat, "display_error") as err,
         ):
-            with self.assertRaises(SystemExit) as cm:
+            with pytest.raises(SystemExit) as cm:
                 chat.main()
-        self.assertEqual(cm.exception.code, 1)
-        self.assertIn("server's properties", err.call_args.args[0])
+        assert cm.value.code == 1
+        assert "server's properties" in err.call_args.args[0]
 
 
-class ReplyModelTests(unittest.TestCase):
+class TestReplyModel:
     def test_the_servers_own_statement_wins(self):
         state = make_state(model="/m/refreshed.gguf")
-        self.assertEqual(_reply_model(mock.Mock(model="/m/real.gguf"), state), "/m/real.gguf")
+        assert _reply_model(mock.Mock(model="/m/real.gguf"), state) == "/m/real.gguf"
 
     def test_falls_back_to_the_refreshed_model_for_an_interrupted_stream(self):
         state = make_state(model="/m/refreshed.gguf")
         interrupted = LlamaChatStream(_FakeStreamResponse([b'data: {"content": "x", "stop": false}']))
         list(interrupted)
-        self.assertIsNone(interrupted.model)
-        self.assertEqual(_reply_model(interrupted, state), "/m/refreshed.gguf")
+        assert interrupted.model is None
+        assert _reply_model(interrupted, state) == "/m/refreshed.gguf"
 
 
 class _FakeStreamResponse:
@@ -177,8 +177,8 @@ class _FakeStreamResponse:
         return iter(self._lines)
 
 
-class AttributionAcrossASwapTests(unittest.TestCase):
-    def test_each_reply_records_the_model_that_wrote_it(self):
+class TestAttributionAcrossASwap:
+    def test_each_reply_records_the_model_that_wrote_it(self, tmp_path):
         server = gemma_server()
         server.n_ctx = 262144
         client = LlamaClient("http://llama.test")
@@ -205,51 +205,49 @@ class AttributionAcrossASwapTests(unittest.TestCase):
             )
             turn("two")
         assistants = [m for m in conv.messages if m["role"] == "assistant"]
-        self.assertEqual([m["model"] for m in assistants], ["/m/gemma.gguf", "/m/qwen.gguf"])
-        self.assertTrue(all("model" not in m for m in conv.messages if m["role"] == "user"))
-        self.assertEqual(state.model, "/m/qwen.gguf")
-        self.assertEqual(state.context_length, 131072)
+        assert [m["model"] for m in assistants] == ["/m/gemma.gguf", "/m/qwen.gguf"]
+        assert all("model" not in m for m in conv.messages if m["role"] == "user")
+        assert state.model == "/m/qwen.gguf"
+        assert state.context_length == 131072
         # What is sent to the server never carries the extra key.
-        self.assertTrue(all(set(m) == {"role", "content"} for m in conv.get_messages()))
+        assert all(set(m) == {"role", "content"} for m in conv.get_messages())
         # The file-level model is now the model served at save time.
-        with tempfile.TemporaryDirectory() as tmp:
-            conv.save(tmp, name="swap", model=state.model)
-            loaded, file_model = Conversation.load(tmp, "swap")
-        self.assertEqual(file_model, "/m/qwen.gguf")
-        self.assertEqual(
-            [m.get("model") for m in loaded.messages], [None, "/m/gemma.gguf", None, "/m/qwen.gguf"]
-        )
+        tmp = str(tmp_path)
+        conv.save(tmp, name="swap", model=state.model)
+        loaded, file_model = Conversation.load(tmp, "swap")
+        assert file_model == "/m/qwen.gguf"
+        assert [m.get("model") for m in loaded.messages] == [None, "/m/gemma.gguf", None, "/m/qwen.gguf"]
 
 
-class PerMessageModelTests(unittest.TestCase):
+class TestPerMessageModel:
     def test_the_model_key_sits_before_content_and_only_on_replies_that_have_one(self):
         conv = Conversation()
         conv.add_user("q")
         conv.add_assistant("a", model="m1")
         conv.add_assistant("old style")
-        self.assertEqual(list(conv.messages[1]), ["role", "timestamp", "model", "content"])
-        self.assertNotIn("model", conv.messages[0])
-        self.assertNotIn("model", conv.messages[2])
+        assert list(conv.messages[1]) == ["role", "timestamp", "model", "content"]
+        assert "model" not in conv.messages[0]
+        assert "model" not in conv.messages[2]
 
-    def test_save_load_round_trip_and_strip_think_preserve_the_model(self):
+    def test_save_load_round_trip_and_strip_think_preserve_the_model(self, tmp_path):
         conv = Conversation()
         conv.add_user("q")
         conv.add_assistant("<think>t</think>answer", model="m1")
-        with tempfile.TemporaryDirectory() as tmp:
-            conv.save(tmp, name="x", model="last", omit_think=True, think_pairs=[("<think>", "</think>")])
-            loaded, _ = Conversation.load(tmp, "x")
-        self.assertEqual(loaded.messages[1]["model"], "m1")
-        self.assertEqual(loaded.messages[1]["content"], "answer")
+        tmp = str(tmp_path)
+        conv.save(tmp, name="x", model="last", omit_think=True, think_pairs=[("<think>", "</think>")])
+        loaded, _ = Conversation.load(tmp, "x")
+        assert loaded.messages[1]["model"] == "m1"
+        assert loaded.messages[1]["content"] == "answer"
 
     def test_recalled_copies_carry_no_model(self):
         conv = Conversation()
         conv.add_user("q")
         conv.add_assistant("a", model="m1")
         conv.recall(1)
-        self.assertEqual(set(conv.messages[-1]), {"role", "content"})
+        assert set(conv.messages[-1]) == {"role", "content"}
 
 
-class CatShowsTheModelTests(unittest.TestCase):
+class TestCatShowsTheModel:
     def test_assistant_messages_show_their_model_and_old_ones_show_nothing(self):
         conv = Conversation()
         conv.add_user("q1")
@@ -257,35 +255,31 @@ class CatShowsTheModelTests(unittest.TestCase):
         conv.add_user("q2")
         conv.add_assistant("a2")
         out = render(lambda: ui.display_cat_conversation("n", conv, "last"))
-        self.assertIn("[/THINK] odd-name", out)
-        self.assertEqual(out.count("odd-name"), 1)
+        assert "[/THINK] odd-name" in out
+        assert out.count("odd-name") == 1
 
 
-class LoadDoesNotChooseTheModelTests(unittest.TestCase):
-    def test_load_leaves_state_model_alone_and_reports_the_files_model(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            conv = Conversation()
-            conv.add_user("hi")
-            conv.save(tmp, name="old", model="some-other-model.gguf")
-            state = make_state()
-            state.config["conversations_dir"] = tmp
-            target = Conversation()
-            out = render(lambda: handle_command("/load", "old", None, target, state))
-        self.assertEqual(state.model, "/m/gemma.gguf")
-        self.assertIn("saved with model: some-other-model.gguf", out)
-        self.assertEqual(len(target.messages), 1)
+class TestLoadDoesNotChooseTheModel:
+    def test_load_leaves_state_model_alone_and_reports_the_files_model(self, tmp_path):
+        tmp = str(tmp_path)
+        conv = Conversation()
+        conv.add_user("hi")
+        conv.save(tmp, name="old", model="some-other-model.gguf")
+        state = make_state()
+        state.config["conversations_dir"] = tmp
+        target = Conversation()
+        out = render(lambda: handle_command("/load", "old", None, target, state))
+        assert state.model == "/m/gemma.gguf"
+        assert "saved with model: some-other-model.gguf" in out
+        assert len(target.messages) == 1
 
-    def test_a_file_without_a_model_has_no_saved_with_note(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            conv = Conversation()
-            conv.add_user("hi")
-            conv.save(tmp, name="nomodel", model="")
-            state = make_state()
-            state.config["conversations_dir"] = tmp
-            out = render(lambda: handle_command("/load", "nomodel", None, Conversation(), state))
-        self.assertNotIn("saved with model", out)
-        self.assertEqual(state.model, "/m/gemma.gguf")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_a_file_without_a_model_has_no_saved_with_note(self, tmp_path):
+        tmp = str(tmp_path)
+        conv = Conversation()
+        conv.add_user("hi")
+        conv.save(tmp, name="nomodel", model="")
+        state = make_state()
+        state.config["conversations_dir"] = tmp
+        out = render(lambda: handle_command("/load", "nomodel", None, Conversation(), state))
+        assert "saved with model" not in out
+        assert state.model == "/m/gemma.gguf"
