@@ -3,7 +3,6 @@
 import contextlib
 import io
 import re
-import unittest
 
 from ui import display_stats
 
@@ -18,26 +17,22 @@ def render(stats, context_length=None):
     return re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
 
 
-class StatsLineTests(unittest.TestCase):
+class TestStatsLine:
     def test_shows_used_total_and_ratio(self):
-        self.assertIn("ctx 1,345 / 8,192 (16.4%)", render(STATS, 8192))
+        assert "ctx 1,345 / 8,192 (16.4%)" in render(STATS, 8192)
 
     def test_unknown_context_length_omits_segment(self):
         for length in (None, 0):
             out = render(STATS, length)
-            self.assertNotIn("ctx", out)
-            self.assertIn("142 tokens", out)
+            assert "ctx" not in out
+            assert "142 tokens" in out
 
     def test_usage_above_the_limit_renders(self):
-        self.assertIn("(109.9%)", render({**STATS, "context_tokens": 9000}, 8192))
+        assert "(109.9%)" in render({**STATS, "context_tokens": 9000}, 8192)
 
     def test_missing_context_tokens_omits_segment(self):
         stats = {k: v for k, v in STATS.items() if k != "context_tokens"}
-        self.assertNotIn("ctx", render(stats, 8192))
+        assert "ctx" not in render(stats, 8192)
 
     def test_empty_stats_print_nothing(self):
-        self.assertEqual(render({}, 8192), "")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert render({}, 8192) == ""

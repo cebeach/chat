@@ -8,12 +8,9 @@ a name says "synthetic". Cases with "synthetic" in the name are built by hand
 because no such model was available.
 """
 
-import re
-import tempfile
-import unittest
 from unittest import mock
 
-import requests
+import pytest
 
 import chat
 import ui
@@ -28,29 +25,25 @@ from llama_client import (
     find_think_tags,
     is_valid_think_pair,
 )
-
-U, R, A = "QZUSERQZ", "QZREASONQZ", "QZANSWERQZ"
-
-QWEN_CONT = f"<|im_start|>user\n{U}<|im_end|>\n<|im_start|>assistant\n<think>{R}</think>{A}"
-QWEN_GEN = f"<|im_start|>user\n{U}<|im_end|>\n<|im_start|>assistant\n<think>\n"
-# Two verbatim excerpts of the Qwen template as served by /props (joined by "..."):
-# the history stripping and the forced-open generation prompt. Captured live.
-QWEN_SRC = (
-    "        {%- if '</think>' in content %}\n"
-    "            {%- set content = content.split('</think>')[-1] | trim %}\n"
-    "        {%- endif %}\n...\n"
-    "    {{- '<|im_start|>assistant\\n<think>\\n' }}"
-)
-
-GEMMA_CONT = f"<|turn>system\n<|think|>\n<turn|>\n<|turn>user\n{U}<turn|>\n<|turn>model\n<|channel>thought\n{R}<channel|>{A}"
-GEMMA_GEN = f"<|turn>system\n<|think|>\n<turn|>\n<|turn>user\n{U}<turn|>\n<|turn>model\n"
-# Verbatim fragments of Gemma's real template as served by /props (joined by "..."),
-# captured live; they contain the guard words and both tags literally.
-GEMMA_SRC = (
-    "{%- if '<|channel>' in part -%}\n...\n"
-    "{%- for part in text.split('<channel|>') -%}\n...\n"
-    "{{- '<|think|>\\n' -}}\n...\n"
-    "{{- '<|channel>thought\\n' + thinking_text"
+from tests.helpers import (
+    DEVSTRAL_CONT,
+    DEVSTRAL_GEN,
+    DEVSTRAL_SRC,
+    GEMMA_CONT,
+    GEMMA_GEN,
+    GEMMA_PAIR,
+    GEMMA_SRC,
+    QWEN_CONT,
+    QWEN_GEN,
+    QWEN_PAIR,
+    QWEN_SRC,
+    A,
+    R,
+    U,
+    devstral_server,
+    gemma_server,
+    qwen_server,
+    render,
 )
 
 GPTOSS_HEAD = (
@@ -74,22 +67,11 @@ DEEPSEEK_CONT = f"<｜User｜>{U}<｜Assistant｜><think>{R}</think>{A}"
 DEEPSEEK_GEN = f"<｜User｜>{U}<｜Assistant｜>"
 DEEPSEEK_SRC = "synthetic source excerpt: ... <think> ..."  # the real one contains "think"
 
-DEVSTRAL_CONT = f"[INST]{U}[/INST][THINK]{R}[/THINK]{A}"
-DEVSTRAL_GEN = f"[INST]{U}[/INST]"
-# Real head of Devstral's template: no thinking-related word anywhere in it.
-DEVSTRAL_SRC = (
-    "{#- Default system message if no system prompt is passed. #}\n"
-    "{%- set default_system_message = '' %}\n\n{#- Begin of sequence token. #}\n{{- bos_token }}\n"
-)
 
-QWEN_PAIR = ("<think>", "</think>")
-GEMMA_PAIR = ("<|channel>thought", "<channel|>")
-
-
-class FindThinkTagsTests(unittest.TestCase):
+class TestFindThinkTags:
     def check(self, cont, gen, src, expected):
         status, pair = find_think_tags(cont, gen, src)
-        self.assertEqual((status, pair), expected)
+        assert (status, pair) == expected
 
     def test_qwen_forced_open_falls_back_to_the_prompts_trailing_marker(self):
         self.check(QWEN_CONT, QWEN_GEN, QWEN_SRC, (PAIR, QWEN_PAIR))
@@ -137,12 +119,12 @@ class FindThinkTagsTests(unittest.TestCase):
         self.check(cont, QWEN_GEN, QWEN_SRC, (PAIR, QWEN_PAIR))
         self.check(cont, QWEN_GEN, "no mirror here", (NONE, None))
 
-    def test_synthetic_role_markers_are_not_thinking_openers(self):
+    def test_synthetic_role_markers_are_not_thinking_openers(self, subtests):
         for gen in [
             f"<|user|>\n{U}<|end|>\n<|assistant|>",
             f"<|start_header_id|>user<|end_header_id|>\n\n{U}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
         ]:
-            with self.subTest(gen=gen):
+            with subtests.test(gen=gen):
                 self.check(f"{gen}{A}", gen, "<|assistant|> <|end_header_id|>", (NONE, None))
 
     def test_synthetic_closing_marker_at_the_end_is_not_an_opener(self):
@@ -154,13 +136,13 @@ class FindThinkTagsTests(unittest.TestCase):
         self.check(cont, f"[INST]{U}[INST]", "think", (NONE, None))
 
 
-class IsValidThinkPairTests(unittest.TestCase):
-    def test_accepts_the_pairs_we_know(self):
+class TestIsValidThinkPair:
+    def test_accepts_the_pairs_we_know(self, subtests):
         for pair in [QWEN_PAIR, GEMMA_PAIR, GPTOSS_PAIR, ("[THINK]", "[/THINK]")]:
-            with self.subTest(pair=pair):
-                self.assertTrue(is_valid_think_pair(*pair))
+            with subtests.test(pair=pair):
+                assert is_valid_think_pair(*pair)
 
-    def test_rejects_empty_whitespace_prose_and_non_strings(self):
+    def test_rejects_empty_whitespace_prose_and_non_strings(self, subtests):
         for pair in [
             ("", ""),
             ("<think>", ""),
@@ -173,36 +155,36 @@ class IsValidThinkPairTests(unittest.TestCase):
             (None, "</x>"),
             (["<think>"], "</think>"),
         ]:
-            with self.subTest(pair=pair):
-                self.assertFalse(is_valid_think_pair(*pair))
+            with subtests.test(pair=pair):
+                assert not is_valid_think_pair(*pair)
 
     def test_length_limits(self):
-        self.assertTrue(is_valid_think_pair("<" + "a" * 58 + ">", "<" + "b" * 78 + ">"))  # 60 and 80
-        self.assertFalse(is_valid_think_pair("<" + "a" * 59 + ">", "</x>"))  # 61
-        self.assertFalse(is_valid_think_pair("<x>", "<" + "b" * 79 + ">"))  # 81
+        assert is_valid_think_pair("<" + "a" * 58 + ">", "<" + "b" * 78 + ">")  # 60 and 80
+        assert not is_valid_think_pair("<" + "a" * 59 + ">", "</x>")  # 61
+        assert not is_valid_think_pair("<x>", "<" + "b" * 79 + ">")  # 81
 
 
-class StripWithDetectedPairsTests(unittest.TestCase):
+class TestStripWithDetectedPairs:
     def test_gpt_oss_reply_becomes_just_the_answer(self):
-        self.assertEqual(strip_think(GPTOSS_REPLY, [GPTOSS_PAIR]), "Hi")
+        assert strip_think(GPTOSS_REPLY, [GPTOSS_PAIR]) == "Hi"
 
     def test_gemma_pair(self):
         text = "<|channel>thought\nreasoning\n<channel|>The answer."
-        self.assertEqual(strip_think(text, [GEMMA_PAIR]), "The answer.")
+        assert strip_think(text, [GEMMA_PAIR]) == "The answer."
         for untouched in ["a<channel|>b", "<|channel>thought only", "<channel|>x<|channel>thought"]:
-            self.assertEqual(strip_think(untouched, [GEMMA_PAIR]), untouched)
+            assert strip_think(untouched, [GEMMA_PAIR]) == untouched
 
     def test_empty_pairs_leave_text_untouched(self):
-        self.assertEqual(strip_think(GPTOSS_REPLY, []), GPTOSS_REPLY)
+        assert strip_think(GPTOSS_REPLY, []) == GPTOSS_REPLY
 
     def test_each_pair_only_strips_its_own_tags(self):
         qwen_reply = "<think>\nq\n</think>\nQ answer"
-        self.assertEqual(strip_think(qwen_reply, [GEMMA_PAIR]), qwen_reply)
-        self.assertEqual(strip_think(qwen_reply, [GEMMA_PAIR, QWEN_PAIR]), "Q answer")
+        assert strip_think(qwen_reply, [GEMMA_PAIR]) == qwen_reply
+        assert strip_think(qwen_reply, [GEMMA_PAIR, QWEN_PAIR]) == "Q answer"
 
 
-class MixedModelSaveTests(unittest.TestCase):
-    def test_a_conversation_spanning_models_is_stripped_for_both(self):
+class TestMixedModelSave:
+    def test_a_conversation_spanning_models_is_stripped_for_both(self, tmp_path):
         conv = Conversation()
         conv.add_user("q1")
         conv.add_assistant("<think>\nq\n</think>\nQwen answer")
@@ -212,118 +194,43 @@ class MixedModelSaveTests(unittest.TestCase):
         conv.add_assistant("lone\n</think>\nstray")  # unbalanced: left alone
         conv.add_user("q4")
         conv.add_assistant("<|channel>thought\nno end")  # unbalanced: left alone
-        with tempfile.TemporaryDirectory() as tmp:
-            conv.save(tmp, name="mixed", omit_think=True, think_pairs=[QWEN_PAIR, GEMMA_PAIR])
-            loaded, _ = Conversation.load(tmp, "mixed")
+        tmp = str(tmp_path)
+        conv.save(tmp, name="mixed", omit_think=True, think_pairs=[QWEN_PAIR, GEMMA_PAIR])
+        loaded, _ = Conversation.load(tmp, "mixed")
         replies = [m["content"] for m in loaded.messages if m["role"] == "assistant"]
-        self.assertEqual(
-            replies, ["Qwen answer", "Gemma answer", "lone\n</think>\nstray", "<|channel>thought\nno end"]
-        )
+        assert replies == [
+            "Qwen answer",
+            "Gemma answer",
+            "lone\n</think>\nstray",
+            "<|channel>thought\nno end",
+        ]
 
 
-class FakeResponse:
-    def __init__(self, json_data=None, lines=()):
-        self._json, self._lines = json_data, lines
-
-    def json(self):
-        if isinstance(self._json, Exception):
-            raise self._json
-        return self._json
-
-    def raise_for_status(self):
-        pass
-
-    def iter_lines(self):
-        return iter(self._lines)
-
-
-class FakeServer:
-    """Stands in for requests.get/post against llama-server's native endpoints."""
-
-    def __init__(self, model_path, source, cont, gen, real_prompt="<real>", n_ctx=4096):
-        self.model_path, self.source, self.n_ctx = model_path, source, n_ctx
-        self.cont, self.gen, self.real_prompt = cont, gen, real_prompt
-        self.fail = False
-        self.bad_json = False
-        self.props_calls = 0
-        self.template_calls = []
-
-    def become(self, model_path, source, cont, gen, real_prompt="<real>", n_ctx=4096):
-        self.model_path, self.source, self.n_ctx = model_path, source, n_ctx
-        self.cont, self.gen, self.real_prompt = cont, gen, real_prompt
-
-    def get(self, url, **kw):
-        assert url.endswith("/props"), url
-        if self.fail:
-            raise requests.ConnectionError("server down")
-        self.props_calls += 1
-        if self.bad_json:
-            return FakeResponse(ValueError("not json"))
-        return FakeResponse(
-            {
-                "model_path": self.model_path,
-                "model_alias": self.model_path,
-                "chat_template": self.source,
-                "default_generation_settings": {"n_ctx": self.n_ctx},
-            }
-        )
-
-    def post(self, url, json=None, **kw):
-        if url.endswith("/completion"):
-            # Like llama-server: only the final chunk names the model that produced the reply.
-            final = f'data: {{"content": "", "stop": true, "model": "{self.model_path}"}}'
-            return FakeResponse(lines=[b'data: {"content": "x", "stop": false}', final.encode()])
-        assert url.endswith("/apply-template"), url
-        self.template_calls.append(json)
-        if self.fail:
-            raise requests.ConnectionError("server down")
-        if json.get("continue_final_message"):
-            return FakeResponse({"prompt": self.cont})
-        messages = json["messages"]
-        if len(messages) == 1 and messages[0]["content"] == U:
-            return FakeResponse({"prompt": self.gen})
-        return FakeResponse({"prompt": self.real_prompt})
-
-    def patched(self):
-        return mock.patch.multiple("requests", get=self.get, post=self.post)
-
-
-def qwen_server():
-    return FakeServer("/m/qwen.gguf", QWEN_SRC, QWEN_CONT, QWEN_GEN, QWEN_GEN.replace(U, "hello"))
-
-
-def gemma_server():
-    return FakeServer("/m/gemma.gguf", GEMMA_SRC, GEMMA_CONT, GEMMA_GEN, GEMMA_GEN.replace(U, "hello"))
-
-
-def devstral_server():
-    return FakeServer("/m/devstral.gguf", DEVSTRAL_SRC, DEVSTRAL_CONT, DEVSTRAL_GEN, DEVSTRAL_GEN)
-
-
-class DetectionTests(unittest.TestCase):
-    def setUp(self):
+class TestDetection:
+    @pytest.fixture(autouse=True)
+    def _setup(self):
         self.client = LlamaClient("http://llama.test")
 
     def test_detects_and_reports_the_source(self):
         server = qwen_server()
         with server.patched():
-            self.assertEqual(self.client.detect_think_tags(), (*QWEN_PAIR, "detected"))
+            assert self.client.detect_think_tags() == (*QWEN_PAIR, "detected")
         # The continuation render must ask for the continuation path explicitly.
         cont_call = next(c for c in server.template_calls if c.get("continue_final_message"))
-        self.assertIs(cont_call["add_generation_prompt"], False)
-        self.assertEqual(cont_call["messages"][1]["reasoning_content"], R)
+        assert cont_call["add_generation_prompt"] is False
+        assert cont_call["messages"][1]["reasoning_content"] == R
 
     def test_accepted_pairs_are_memoized_by_server_identity(self):
         server = qwen_server()
         with server.patched():
             self.client.detect_think_tags()
             calls = len(server.template_calls)
-            self.assertEqual(self.client.detect_think_tags(), (*QWEN_PAIR, "detected"))
-            self.assertEqual(len(server.template_calls), calls)  # no extra /apply-template
-            self.assertEqual(server.props_calls, 2)  # but /props is checked every call
+            assert self.client.detect_think_tags() == (*QWEN_PAIR, "detected")
+            assert len(server.template_calls) == calls  # no extra /apply-template
+            assert server.props_calls == 2  # but /props is checked every call
             server.become("/m/gemma.gguf", GEMMA_SRC, GEMMA_CONT, GEMMA_GEN)  # a different model
-            self.assertEqual(self.client.detect_think_tags(), (*GEMMA_PAIR, "detected"))
-            self.assertGreater(len(server.template_calls), calls)
+            assert self.client.detect_think_tags() == (*GEMMA_PAIR, "detected")
+            assert len(server.template_calls) > calls
 
     def test_a_changed_template_with_the_same_model_path_is_noticed(self):
         server = qwen_server()
@@ -332,32 +239,32 @@ class DetectionTests(unittest.TestCase):
             calls = len(server.template_calls)
             server.source = QWEN_SRC + " edited"
             self.client.detect_think_tags()
-            self.assertGreater(len(server.template_calls), calls)
+            assert len(server.template_calls) > calls
 
     def test_a_none_result_is_not_memoized(self):
         server = devstral_server()
         with server.patched():
-            self.assertIsNone(self.client.detect_think_tags())
+            assert self.client.detect_think_tags() is None
             calls = len(server.template_calls)
-            self.assertIsNone(self.client.detect_think_tags())
-            self.assertGreater(len(server.template_calls), calls)  # recomputed
+            assert self.client.detect_think_tags() is None
+            assert len(server.template_calls) > calls  # recomputed
 
     def test_a_conclusive_none_clears_the_previous_pair(self):
         server = qwen_server()
         with server.patched():
-            self.assertIsNotNone(self.client.detect_think_tags())
+            assert self.client.detect_think_tags() is not None
             server.become("/m/devstral.gguf", DEVSTRAL_SRC, DEVSTRAL_CONT, DEVSTRAL_GEN)
-            self.assertIsNone(self.client.detect_think_tags())
+            assert self.client.detect_think_tags() is None
 
     def test_server_errors_keep_the_previous_value_and_never_raise(self):
         server = qwen_server()
         with server.patched():
             before = self.client.detect_think_tags()
             server.fail = True
-            self.assertEqual(self.client.detect_think_tags(), before)
+            assert self.client.detect_think_tags() == before
             server.fail = False
             server.bad_json = True
-            self.assertEqual(self.client.detect_think_tags(), before)
+            assert self.client.detect_think_tags() == before
 
     def test_a_failed_anchor_keeps_the_previous_value(self):
         server = qwen_server()
@@ -365,26 +272,26 @@ class DetectionTests(unittest.TestCase):
             before = self.client.detect_think_tags()
             # new model whose renders do not line up and with nothing for layer 2
             server.become("/m/odd.gguf", "no words", QWEN_CONT.replace("<|im_start|>user", "X"), QWEN_GEN)
-            self.assertEqual(self.client.detect_think_tags(), before)
+            assert self.client.detect_think_tags() == before
 
     def test_the_config_override_wins_and_makes_no_template_calls(self):
         client = LlamaClient("http://llama.test", think_override=("[A]", "[/A]"))
         server = qwen_server()
         with server.patched():
-            self.assertEqual(client.detect_think_tags(), ("[A]", "[/A]", "config"))
+            assert client.detect_think_tags() == ("[A]", "[/A]", "config")
         # The model and context length are still read from /props (one GET), but
         # nothing is rendered for detection.
-        self.assertEqual(server.props_calls, 1)
-        self.assertEqual(server.template_calls, [])
+        assert server.props_calls == 1
+        assert server.template_calls == []
 
     def test_override_needs_both_keys(self):
-        self.assertIsNone(_think_override({"think_start": "<x>", "think_end": ""}))
-        self.assertIsNone(_think_override({"think_start": "", "think_end": "</x>"}))
-        self.assertIsNone(_think_override({}))
-        self.assertEqual(_think_override({"think_start": "<x>", "think_end": "</x>"}), ("<x>", "</x>"))
+        assert _think_override({"think_start": "<x>", "think_end": ""}) is None
+        assert _think_override({"think_start": "", "think_end": "</x>"}) is None
+        assert _think_override({}) is None
+        assert _think_override({"think_start": "<x>", "think_end": "</x>"}) == ("<x>", "</x>")
 
 
-class ChatPrefixTests(unittest.TestCase):
+class TestChatPrefix:
     def stream_text(self, client, server):
         with server.patched():
             stream = client.chat("m", [{"role": "user", "content": "hello"}])
@@ -392,31 +299,25 @@ class ChatPrefixTests(unittest.TestCase):
 
     def test_prefix_for_a_forced_open_template_but_not_for_self_opened_ones(self):
         client = LlamaClient("http://llama.test")
-        self.assertEqual(self.stream_text(client, qwen_server())[0], ["<think>\n", "x"])
-        self.assertEqual(self.stream_text(client, gemma_server())[0], ["x"])
-        self.assertEqual(self.stream_text(client, devstral_server())[0], ["x"])
+        assert self.stream_text(client, qwen_server())[0] == ["<think>\n", "x"]
+        assert self.stream_text(client, gemma_server())[0] == ["x"]
+        assert self.stream_text(client, devstral_server())[0] == ["x"]
 
     def test_detection_runs_before_sending_so_a_swapped_model_is_not_judged_by_stale_tags(self):
         client = LlamaClient("http://llama.test")
         server = qwen_server()
         pieces, tags = self.stream_text(client, server)
-        self.assertEqual((pieces, tags), (["<think>\n", "x"], (*QWEN_PAIR, "detected")))
+        assert (pieces, tags) == (["<think>\n", "x"], (*QWEN_PAIR, "detected"))
         # The server is restarted with Gemma; the same client and no new detection call in between.
         server.become("/m/gemma.gguf", GEMMA_SRC, GEMMA_CONT, GEMMA_GEN, GEMMA_GEN.replace(U, "hello"))
         pieces, tags = self.stream_text(client, server)
-        self.assertEqual((pieces, tags), (["x"], (*GEMMA_PAIR, "detected")))
+        assert (pieces, tags) == (["x"], (*GEMMA_PAIR, "detected"))
 
     def test_a_closed_block_in_history_is_not_an_opening_tag(self):
         client = LlamaClient("http://llama.test")
         server = qwen_server()
         server.real_prompt = "<think>a</think>\nassistant\n"
-        self.assertEqual(self.stream_text(client, server)[0], ["x"])
-
-
-def render(callable_):
-    with ui.console.capture() as cap:
-        callable_()
-    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", cap.get()).split())
+        assert self.stream_text(client, server)[0] == ["x"]
 
 
 def make_state(**kw):
@@ -427,8 +328,8 @@ def make_state(**kw):
 BRACKET = ("[THINK]", "[/THINK]", "detected")
 
 
-class ConfigRenderingTests(unittest.TestCase):
-    def test_think_tags_row_for_each_kind_of_value(self):
+class TestConfigRendering:
+    def test_think_tags_row_for_each_kind_of_value(self, subtests):
         config = {"system_prompt": "", "llama_url": "u", "conversations_dir": "d"}
         cases = [
             ((*GEMMA_PAIR, "detected"), "<|channel>thought … <channel|> (detected)"),
@@ -437,18 +338,18 @@ class ConfigRenderingTests(unittest.TestCase):
             (None, "none detected"),
         ]
         for tags, expected in cases:
-            with self.subTest(tags=tags):
+            with subtests.test(tags=tags):
                 out = render(lambda: ui.display_config(config, "m", None, tags))
-                self.assertIn(expected, out)
+                assert expected in out
 
     def test_config_command_shows_the_active_tags(self):
         state = make_state(think_tags=BRACKET)
         out = render(lambda: handle_command("/config", "", None, Conversation(), state))
-        self.assertIn("think_tags", out)
-        self.assertIn("[THINK] … [/THINK] (detected)", out)
+        assert "think_tags" in out
+        assert "[THINK] … [/THINK] (detected)" in out
 
 
-class ToggleWarningTests(unittest.TestCase):
+class TestToggleWarning:
     def run_toggle(self, state, args="save_thinking off"):
         with mock.patch.object(chat, "display_info") as info:
             handle_command("/config", args, None, Conversation(), state)
@@ -457,30 +358,30 @@ class ToggleWarningTests(unittest.TestCase):
     def test_off_with_no_tags_warns(self):
         state = make_state()
         msg = self.run_toggle(state)
-        self.assertEqual(
-            msg,
-            "save_thinking: off (no thinking tags known for the current model, so its replies will not be stripped)",
+        assert (
+            msg
+            == "save_thinking: off (no thinking tags known for the current model, so its replies will not be stripped)"
         )
 
     def test_the_warning_mentions_earlier_replies_when_pairs_were_seen(self):
         state = make_state(think_pairs_seen=[QWEN_PAIR])
-        self.assertIn("; earlier replies with known tags still are)", self.run_toggle(state))
+        assert "; earlier replies with known tags still are)" in self.run_toggle(state)
 
     def test_off_with_an_active_pair_is_plain(self):
         state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
-        self.assertEqual(self.run_toggle(state), "save_thinking: off")
+        assert self.run_toggle(state) == "save_thinking: off"
 
     def test_on_never_warns(self):
-        self.assertEqual(self.run_toggle(make_state(), "save_thinking on"), "save_thinking: on")
+        assert self.run_toggle(make_state(), "save_thinking on") == "save_thinking: on"
 
     def test_a_swap_to_a_model_without_tags_is_flagged_at_the_next_toggle(self):
         state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
         with mock.patch.object(chat, "display_info"):
             _update_think_tags(state, None)
-        self.assertIn("will not be stripped", self.run_toggle(state))
+        assert "will not be stripped" in self.run_toggle(state)
 
 
-class ChangeAnnouncementTests(unittest.TestCase):
+class TestChangeAnnouncement:
     def announce(self, state, tags, **kw):
         with mock.patch.object(chat, "display_info") as info:
             _update_think_tags(state, tags, **kw)
@@ -488,31 +389,31 @@ class ChangeAnnouncementTests(unittest.TestCase):
 
     def test_a_pair_change_prints_exactly_one_line(self):
         state = make_state()
-        self.assertEqual(self.announce(state, (*QWEN_PAIR, "detected"), announce=False), [])  # startup
+        assert self.announce(state, (*QWEN_PAIR, "detected"), announce=False) == []  # startup
         out = self.announce(state, (*GEMMA_PAIR, "detected"))
-        self.assertEqual(len(out), 1)
-        self.assertIn("thinking tags: <|channel>thought … <channel|> (detected)", out[0])
+        assert len(out) == 1
+        assert "thinking tags: <|channel>thought … <channel|> (detected)" in out[0]
 
     def test_unchanged_or_source_only_changes_print_nothing(self):
         state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
-        self.assertEqual(self.announce(state, (*QWEN_PAIR, "detected")), [])
-        self.assertEqual(self.announce(state, (*QWEN_PAIR, "config")), [])
+        assert self.announce(state, (*QWEN_PAIR, "detected")) == []
+        assert self.announce(state, (*QWEN_PAIR, "config")) == []
 
     def test_going_to_none_is_announced(self):
         state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
-        self.assertEqual(self.announce(state, None), ["thinking tags: none detected for the current model"])
-        self.assertEqual(self.announce(state, None), [])  # not again
+        assert self.announce(state, None) == ["thinking tags: none detected for the current model"]
+        assert self.announce(state, None) == []  # not again
 
     def test_pairs_seen_accumulate_without_duplicates(self):
         state = make_state()
         for tags in [(*QWEN_PAIR, "detected"), (*GEMMA_PAIR, "detected"), (*QWEN_PAIR, "config"), None]:
             self.announce(state, tags, announce=False)
-        self.assertEqual(state.think_pairs_seen, [QWEN_PAIR, GEMMA_PAIR])
+        assert state.think_pairs_seen == [QWEN_PAIR, GEMMA_PAIR]
 
     def test_bracket_tags_are_announced_without_raising(self):
         state = make_state()
         out = render(lambda: _update_think_tags(state, BRACKET))
-        self.assertIn("thinking tags: [THINK] … [/THINK] (detected)", out)
+        assert "thinking tags: [THINK] … [/THINK] (detected)" in out
 
     def test_an_inconclusive_result_keeps_the_pair_and_prints_nothing(self):
         client = LlamaClient("http://llama.test")
@@ -521,31 +422,27 @@ class ChangeAnnouncementTests(unittest.TestCase):
         with server.patched():
             self.announce(state, client.detect_think_tags(), announce=False)
             server.fail = True
-            self.assertEqual(self.announce(state, client.detect_think_tags()), [])
-        self.assertEqual(state.think_tags, (*QWEN_PAIR, "detected"))
+            assert self.announce(state, client.detect_think_tags()) == []
+        assert state.think_tags == (*QWEN_PAIR, "detected")
 
 
-class SavePathsUseSeenPairsTests(unittest.TestCase):
-    def test_save_and_autosave_strip_with_all_seen_pairs(self):
+class TestSavePathsUseSeenPairs:
+    def test_save_and_autosave_strip_with_all_seen_pairs(self, tmp_path):
         conv = Conversation()
         conv.add_user("q")
         conv.add_assistant(GPTOSS_REPLY)
-        with tempfile.TemporaryDirectory() as tmp:
-            state = State(
-                model="m",
-                config={"conversations_dir": tmp, "auto_save": True, "save_thinking": False},
-                context_length=None,
-                auto_save_name="auto_t",
-                think_pairs_seen=[GPTOSS_PAIR],
-            )
-            with mock.patch.object(chat, "display_info"):
-                handle_command("/save", "manual", None, conv, state)
-            _auto_save(conv, state)
-            for name in ("manual", "auto_t"):
-                loaded, _ = Conversation.load(tmp, name)
-                self.assertEqual(loaded.messages[1]["content"], "Hi")
-        self.assertEqual(conv.messages[1]["content"], GPTOSS_REPLY)  # memory untouched
-
-
-if __name__ == "__main__":
-    unittest.main()
+        tmp = str(tmp_path)
+        state = State(
+            model="m",
+            config={"conversations_dir": tmp, "auto_save": True, "save_thinking": False},
+            context_length=None,
+            auto_save_name="auto_t",
+            think_pairs_seen=[GPTOSS_PAIR],
+        )
+        with mock.patch.object(chat, "display_info"):
+            handle_command("/save", "manual", None, conv, state)
+        _auto_save(conv, state)
+        for name in ("manual", "auto_t"):
+            loaded, _ = Conversation.load(tmp, name)
+            assert loaded.messages[1]["content"] == "Hi"
+        assert conv.messages[1]["content"] == GPTOSS_REPLY  # memory untouched

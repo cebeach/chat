@@ -19,6 +19,16 @@ venv/bin/ruff check .
 venv/bin/ruff format --check .
 ```
 
+## Testing
+
+```bash
+pip install -r requirements-dev.txt   # pytest (needs >= 9)
+venv/bin/python -m pytest
+venv/bin/python -m pytest tests/test_load.py::TestLoadMergesRecordedThinkPairs   # one class
+```
+
+Tests are pytest style (plain `assert`, `tmp_path`, `subtests`); mocking stays on `unittest.mock`. Fixtures and fakes shared between files live in `tests/helpers.py`.
+
 ## Architecture
 
 Air-gapped terminal chat app talking to a local llama.cpp server. Six source files, no package structure:
@@ -40,7 +50,7 @@ User input → `chat.py` REPL → `Conversation.add_user()` → `LlamaClient.cha
 
 ### Key conventions
 
-- Zero external dependencies beyond `requests` and `rich`. New features should use stdlib only.
+- Zero external dependencies beyond `requests` and `rich`. New features should use stdlib only. `ruff` and `pytest` are development-only tools (`pytest` is in `requirements-dev.txt`).
 - Config, conversations, and readline history all live under `~/.config/chat/` and `~/.local/share/chat/`.
 - `state` dict in the REPL carries mutable session state (`model`, `config`, `show_stats`, `options`, `last_stats`).
 - Model options (`seed`, `temperature`, `top_p`) use `None` to mean "use llama-server default"; `None` values are filtered out before sending to the API.
