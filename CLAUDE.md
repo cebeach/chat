@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## File access
+
+Claude has permission to access only the current working directory (this repository). Every other path requires explicit permission from the user.
+
+The one exception is the llama.cpp source. It is readable at `llama.cpp/`, a symlink the user maintains to their local checkout, which matches the `llama-server` binary they run. Use it for llama-server flags, endpoints and defaults instead of relying on memory. That directory alone is granted by the `Read(llama.cpp/**)` rule in `.claude/settings.local.json`. Treat it as read-only. If the link is missing, or a read through it is refused, ask the user; do not look for the source anywhere else. The link is not committed (see `.gitignore`).
+
 ## Running
 
 ```bash
@@ -10,7 +16,7 @@ python chat.py              # start chat with whatever model llama-server is ser
 python chat.py --url http://host:8001  # custom llama-server URL
 ```
 
-Requires a running llama-server (`llama-server --port 8001 -m <model>`).
+`chat.py` requires a running llama-server (`llama-server --port 8001 -m <model>`). The test suite does not: the offline tests fake the server, and the `integration` tests start their own (see Testing).
 
 ## Linting
 

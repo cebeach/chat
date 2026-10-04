@@ -10,7 +10,7 @@ python chat.py              # start chat with whatever model llama-server is ser
 python chat.py --url http://host:8001  # custom llama-server URL
 ```
 
-Requires a running llama-server (`llama-server --port 8001 -m <model>`).
+`chat.py` requires a running llama-server (`llama-server --port 8001 -m <model>`). The test suite does not: the offline tests fake the server, and the `integration` tests start their own (see Testing).
 
 ## Linting
 

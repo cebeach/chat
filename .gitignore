@@ -211,3 +211,7 @@ __marimo__/
 
 # Machine-specific settings for the llama-server integration tests (docs/testing.md)
 tests/llama-server.local.toml
+
+# Symlink to the local llama.cpp source, read-only reference (see CLAUDE.md). No trailing slash:
+# git sees a symlink as a file, so "llama.cpp/" would not match it.
+/llama.cpp
