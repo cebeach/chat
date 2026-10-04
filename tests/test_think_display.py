@@ -17,7 +17,7 @@ import ui
 from chat import State, _think_end, handle_command
 from config import DEFAULTS
 from conversation import Conversation
-from ui import ThinkSeparator, display_assistant_stream, separate_thinking
+from ui import ThinkSeparator, display_assistant_stream
 
 D = ui.THINK_DELIMITER  # "\n***\n"
 GEMMA_END = "<channel|>"
@@ -180,6 +180,15 @@ class TestDisplayAssistantStream:
         assert f"<channel|>{D}x" in drawn
 
 
+def separate_thinking(text, ends):
+    """The reference rule ThinkSeparator streams: THINK_DELIMITER after each closing
+    tag in `ends`, absorbing every "\\n" that directly follows the tag."""
+    for end in ends:
+        if end:
+            text = re.sub(re.escape(end) + r"\n*", lambda m: end + D, text)
+    return text
+
+
 class TestSeparateThinking:
     def test_adds_the_delimiter_after_the_tag_and_absorbs_following_newlines(self):
         assert separate_thinking("why<channel|>144", [GEMMA_END]) == f"why<channel|>{D}144"
@@ -220,11 +229,11 @@ class TestSeparateThinking:
                     assert feed_all(end, chunks(text, size)) == expected
 
 
-def saved_conversation(tmp, think_pairs, with_pairs=True):
+def saved_conversation(tmp, thinking="why", content="The answer."):
     conv = Conversation()
     conv.add_user("question mentioning <channel|> literally")
-    conv.add_assistant("<|channel>thought\nwhy<channel|>The answer.", model="/m/gemma.gguf")
-    conv.save(tmp, name="saved", model="/m/gemma.gguf", think_pairs=think_pairs if with_pairs else ())
+    conv.add_assistant(content, model="/m/gemma.gguf", thinking=thinking)
+    conv.save(tmp, name="saved", model="/m/gemma.gguf")
 
 
 class TestCatSeparation:
@@ -238,38 +247,46 @@ class TestCatSeparation:
             handle_command("/cat", "saved", None, Conversation(), self.state)
         return re.sub(r"\x1b\[[0-9;]*m", "", cap.get())
 
-    def test_assistant_replies_get_the_delimiter_and_user_messages_do_not(self):
-        saved_conversation(self.tmp, [("<|channel>thought", "<channel|>")])
+    def test_thinking_is_drawn_before_the_delimiter_and_the_content(self):
+        saved_conversation(self.tmp)
         out = self.cat()
-        assert "why<channel|>\n\n***\n\nThe answer." in out
+        assert "why\n\n***\n\nThe answer." in out
         assert "question mentioning <channel|> literally" in out  # user text untouched
 
-    def test_a_file_without_recorded_pairs_prints_as_before(self):
-        saved_conversation(self.tmp, [], with_pairs=False)
-        assert "why<channel|>The answer." in self.cat()
+    def test_a_reply_without_thinking_prints_as_its_content(self):
+        saved_conversation(self.tmp, thinking=None, content="why<channel|>The answer.")
+        out = self.cat()
+        assert "why<channel|>The answer." in out
+        assert "***" not in out
 
-    def test_invalid_recorded_pairs_are_ignored(self):
-        saved_conversation(self.tmp, [])
+    def test_a_reply_that_was_only_thinking_ends_with_the_delimiter(self):
+        saved_conversation(self.tmp, thinking="cut off", content="")
+        assert "cut off\n\n***" in self.cat()
+
+    def test_a_legacy_think_pairs_key_changes_nothing(self):
+        saved_conversation(self.tmp, thinking=None, content="why<channel|>The answer.")
         path = Path(self.tmp) / "saved.json"
         data = json.loads(path.read_text())
-        data["think_pairs"] = [["", ""], ["the", "The"], ["<a>", "so the answer is"], "junk", ["<x>"]]
+        data["think_pairs"] = [["<|channel>thought", "<channel|>"]]
         path.write_text(json.dumps(data))
-        assert "why<channel|>The answer." in self.cat()
+        out = self.cat()
+        assert "why<channel|>The answer." in out
+        assert "***" not in out
 
     def test_saved_text_that_looks_like_markup_prints_literally_instead_of_raising(self):
         conv = Conversation()
         conv.add_user("see [/path] please")
-        conv.add_assistant("[THINK]hmm[/THINK]answer [/etc/hosts]", model="/m/x.gguf")
-        conv.save(self.tmp, name="saved", model="/m/x.gguf", think_pairs=[("[THINK]", "[/THINK]")])
+        conv.add_assistant("answer [/etc/hosts]", model="/m/x.gguf", thinking="[THINK]hmm[/THINK]")
+        conv.save(self.tmp, name="saved", model="/m/x.gguf")
         out = self.cat()
         assert "see [/path] please" in out
-        assert "[THINK]hmm[/THINK]\n\n***\n\nanswer [/etc/hosts]" in out  # bracket-style pair separated too
+        assert "[THINK]hmm[/THINK]\n\n***\n\nanswer [/etc/hosts]" in out
 
     def test_the_stored_file_never_contains_the_delimiter(self):
-        saved_conversation(self.tmp, [("<|channel>thought", "<channel|>")])
+        saved_conversation(self.tmp)
         self.cat()
-        stored = json.loads((Path(self.tmp) / "saved.json").read_text())["messages"][1]["content"]
-        assert stored == "<|channel>thought\nwhy<channel|>The answer."
+        stored = json.loads((Path(self.tmp) / "saved.json").read_text())["messages"][1]
+        assert (stored["thinking"], stored["content"]) == ("why", "The answer.")
 
 
 class TestThinkEnd:

@@ -1,51 +1,38 @@
-import functools
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 
 
-# Most thinking-tag pairs a session keeps and a saved file records (the most
-# recent ones on save). The same cap on both ends means whatever is written can
-# always be read back, and a hostile file cannot add an unbounded number of
-# strip patterns.
-MAX_THINK_PAIRS = 16
+def split_think(text, tags):
+    """Split one reply into (thinking, content) using its (start, end) thinking tags.
 
-
-@functools.lru_cache(maxsize=None)
-def _pair_regex(start, end):
-    # A balanced pair only: neither of its own tags may appear inside it.
-    # Unbalanced or nested tags are deliberately not matched (they indicate a
-    # bug upstream and are left in the file as evidence).
-    s, e = re.escape(start), re.escape(end)
-    return re.compile(rf"{s}(?:(?!{s}|{e}).)*{e}", re.DOTALL)
-
-
-def _read_think_pairs(raw):
-    """Structurally filter the pairs recorded in a file: a list of two-string
-    lists becomes a list of (start, end) tuples (JSON gives lists, and the
-    session compares tuples), at most MAX_THINK_PAIRS of them. Whether a pair
-    has a sensible shape is checked by the caller."""
-    pairs = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry):
-                pairs.append((entry[0], entry[1]))
-                if len(pairs) == MAX_THINK_PAIRS:
-                    break
-    return pairs
-
-
-def strip_think(text, pairs):
-    """Remove balanced thinking blocks for each (start, end) pair in pairs.
-
-    Anything else is left untouched; with no pairs the text is returned as is.
+    The tags are not part of either result. Several blocks are joined with a
+    blank line. A block that is never closed (a reply cut off by the token limit
+    or the end of the context) takes everything after its opener, which leaves
+    content empty. With no tags, or no opener in the text, the reply is returned
+    untouched as ("", text).
     """
-    changed = False
-    for start, end in pairs:
-        text, count = _pair_regex(start, end).subn("", text)
-        changed = changed or count > 0
-    return text.strip() if changed else text
+    if not tags:
+        return "", text
+    start, end = tags[:2]
+    if not start or not end or start not in text:
+        return "", text
+    thinking, content = [], []
+    pos = 0
+    while True:
+        opened = text.find(start, pos)
+        if opened == -1:
+            content.append(text[pos:])
+            break
+        content.append(text[pos:opened])
+        body = opened + len(start)
+        closed = text.find(end, body)
+        if closed == -1:
+            thinking.append(text[body:])
+            break
+        thinking.append(text[body:closed])
+        pos = closed + len(end)
+    return "\n\n".join(t.strip() for t in thinking if t.strip()), "".join(content).strip()
 
 
 class Conversation:
@@ -53,11 +40,8 @@ class Conversation:
         self.system_prompt = system_prompt
         self.messages = []
         self.source_file = None
-        # Thinking-tag pairs recorded in a loaded file (see load); information
-        # only, the session decides what to do with them.
-        self.think_pairs = []
 
-    def _add(self, role, content, source_file=None, model=None):
+    def _add(self, role, content, source_file=None, model=None, thinking=None):
         msg = {
             "role": role,
             "timestamp": datetime.now().isoformat(),
@@ -66,15 +50,22 @@ class Conversation:
             msg["source_file"] = source_file
         if model:
             msg["model"] = model
+        if thinking:
+            msg["thinking"] = thinking
         msg["content"] = content  # Add content last
         self.messages.append(msg)
 
     def add_user(self, content, source_file=None):
         self._add("user", content, source_file=source_file)
 
-    def add_assistant(self, content, model=None):
-        """Add an assistant reply; model is the model that produced it, if known."""
-        self._add("assistant", content, model=model)
+    def add_assistant(self, content, model=None, thinking=None):
+        """Add an assistant reply.
+
+        model is the model that produced it, if known. thinking is the reasoning
+        split off the reply (see split_think); it is stored only when non-empty,
+        and content then holds the answer alone.
+        """
+        self._add("assistant", content, model=model, thinking=thinking)
 
     def clear(self):
         self.messages.clear()
@@ -132,30 +123,33 @@ class Conversation:
     def get_messages(self):
         """Return messages list with system prompt prepended if set.
 
-        Only returns 'role' and 'content' fields (not metadata like source_file).
+        Only returns 'role' and 'content' fields (not metadata like source_file),
+        so the reasoning kept in 'thinking' is never sent back to the model. An
+        assistant message with empty content (a reply that was only thinking) is
+        left out together with the user message just before it, so no empty
+        assistant turn reaches the chat template.
         """
         msgs = []
         if self.system_prompt:
             msgs.append({"role": "system", "content": self.system_prompt})
         for msg in self.messages:
+            if msg["role"] == "assistant" and not msg["content"]:
+                if msgs and msgs[-1]["role"] == "user":
+                    msgs.pop()
+                continue
             msgs.append({"role": msg["role"], "content": msg["content"]})
         return msgs
 
-    def save(self, conversations_dir, name=None, model="", omit_think=False, think_pairs=()):
+    def save(self, conversations_dir, name=None, model="", omit_thinking=False):
         """Save conversation to a JSON file.
 
         Args:
             conversations_dir: Directory to save into (created if missing).
             name: Filename stem. Defaults to a timestamp.
             model: Current model name to store in the file.
-            omit_think: Drop balanced thinking blocks (for each (start, end) in
-                think_pairs) from assistant messages in the saved file. The
-                in-memory messages are never modified.
-            think_pairs: The (start, end) thinking-tag pairs known to the
-                session. They are used for omit_think and, whenever given, also
-                recorded in the file (at most the MAX_THINK_PAIRS most recent)
-                so a later /load can strip replies written by a model the
-                loading session never ran.
+            omit_thinking: Leave the "thinking" field out of the assistant
+                messages in the saved file. The in-memory messages are never
+                modified.
 
         Returns:
             The Path of the saved file.
@@ -175,15 +169,9 @@ class Conversation:
         if self.source_file is not None:
             data["source_file"] = self.source_file
         data["system_prompt"] = self.system_prompt
-        recorded = [list(pair) for pair in list(think_pairs)[-MAX_THINK_PAIRS:]]
-        if recorded:
-            data["think_pairs"] = recorded
         messages = self.messages
-        if omit_think and think_pairs:
-            messages = [
-                {**m, "content": strip_think(m["content"], think_pairs)} if m["role"] == "assistant" else m
-                for m in messages
-            ]
+        if omit_thinking:
+            messages = [{k: v for k, v in m.items() if k != "thinking"} for m in messages]
         data["messages"] = messages
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
@@ -211,7 +199,6 @@ class Conversation:
         conv = cls(system_prompt=data.get("system_prompt", ""))
         conv.messages = data.get("messages", [])
         conv.source_file = data.get("source_file")
-        conv.think_pairs = _read_think_pairs(data.get("think_pairs"))
         return conv, data.get("model", "")
 
     @staticmethod

@@ -18,7 +18,7 @@ current session only.
 | `system_prompt` | string | `""` | System prompt for new sessions. |
 | `conversations_dir` | string | `~/.local/share/chat/conversations` | Where `/save`, auto-save and `/load` look. |
 | `auto_save` | bool | `true` | Save after each reply and on exit. |
-| `save_thinking` | bool | `true` | Keep the model's reasoning in saved files. |
+| `save_thinking` | bool | `true` | Keep the model's reasoning (the `thinking` field) in saved files. |
 | `think_start`, `think_end` | string | `""` | Override the detected thinking tags. Both must be set. |
 | `seed` | int | unset | Sampling seed. Unset means the server's default (random). |
 | `temperature` | float | unset | Unset means the server's default (0.8). |

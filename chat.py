@@ -12,8 +12,8 @@ from requests.exceptions import ConnectionError, HTTPError
 from rich.markup import escape
 
 from config import load_config
-from conversation import MAX_THINK_PAIRS, Conversation
-from llama_client import LlamaClient, is_valid_think_pair
+from conversation import Conversation, split_think
+from llama_client import LlamaClient, ThinkTagsError
 from ui import (
     console,
     display_assistant_stream,
@@ -50,9 +50,6 @@ class State:
     last_read_file: str | None = None
     # Active thinking tags as (start, end, source), or None. See docs/thinking-tags.md.
     think_tags: tuple | None = None
-    # Every (start, end) pair known this session, active or loaded from a saved
-    # file; saves strip all of them and record them in the file.
-    think_pairs_seen: list = field(default_factory=list)
 
 
 def parse_args():
@@ -143,13 +140,12 @@ def _handle_config(args, state, client=None):
     msg = f"{key}: {'on' if state.config[key] else 'off'}"
     if key == "save_thinking" and not state.config[key] and state.think_tags is None:
         # Do not let a no-op look like it works.
-        msg += " (no thinking tags known for the current model, so its replies will not be stripped"
-        msg += "; earlier replies with known tags still are)" if state.think_pairs_seen else ")"
+        msg += " (no thinking tags known for the current model, so its replies cannot be separated and are saved whole)"
     display_info(msg)
 
 
-def _omit_think(state):
-    """True when saved files should drop thinking blocks."""
+def _omit_thinking(state):
+    """True when saved files should leave out the thinking field."""
     return not state.config.get("save_thinking", _CONFIG_TOGGLES["save_thinking"])
 
 
@@ -160,7 +156,7 @@ def _think_override(config):
 
 
 def _update_think_tags(state, tags, announce=True):
-    """Make `tags` the active thinking tags and remember the pair for saving.
+    """Make `tags` the active thinking tags.
 
     When the pair changes between turns (including to None) one info line says
     so, because a model swap while save_thinking is already off produces no
@@ -168,8 +164,6 @@ def _update_think_tags(state, tags, announce=True):
     """
     changed = (state.think_tags or (None,))[:2] != (tags or (None,))[:2]
     state.think_tags = tags
-    if tags and tags[:2] not in state.think_pairs_seen:
-        state.think_pairs_seen.append(tags[:2])
     if changed and announce:
         text = describe_think_tags(tags)
         display_info(
@@ -177,19 +171,14 @@ def _update_think_tags(state, tags, announce=True):
         )
 
 
-def _merge_think_pairs(state, pairs):
-    """Add the thinking-tag pairs recorded in a loaded file to the session.
+def _store_reply(conversation, response, chat_stream, state):
+    """Add the streamed reply to the conversation, thinking split off its content.
 
-    The file is untrusted input, so a pair is used only if it has the shape of
-    a thinking-tag pair; duplicates are skipped and the list never grows past
-    MAX_THINK_PAIRS. This is what lets a later save strip replies written by a
-    model this session never ran.
+    Split once, with the tags detected for this very turn, so a saved file never
+    needs them again. Without tags the reply is stored whole.
     """
-    for pair in pairs:
-        if len(state.think_pairs_seen) >= MAX_THINK_PAIRS:
-            break
-        if pair not in state.think_pairs_seen and is_valid_think_pair(*pair):
-            state.think_pairs_seen.append(pair)
+    thinking, answer = split_think(response, chat_stream.think_tags)
+    conversation.add_assistant(answer, model=_reply_model(chat_stream, state), thinking=thinking)
 
 
 def _sync_server_info(state, model, n_ctx, announce=True):
@@ -295,8 +284,7 @@ def handle_command(cmd, args, client, conversation, state):
                 conv_dir,
                 name=name,
                 model=state.model,
-                omit_think=_omit_think(state),
-                think_pairs=state.think_pairs_seen,
+                omit_thinking=_omit_thinking(state),
             )
             display_info(f"Conversation saved: {filepath}")
         except OSError as e:
@@ -319,9 +307,6 @@ def handle_command(cmd, args, client, conversation, state):
                 conversation.source_file = loaded_conv.source_file
                 # Token counts from the previous conversation no longer apply.
                 state.last_stats = {}
-                # The tag pairs the saving session knew, so this session can strip
-                # the loaded replies even if it never ran those models.
-                _merge_think_pairs(state, loaded_conv.think_pairs)
                 saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
                 display_info(
                     f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
@@ -339,11 +324,7 @@ def handle_command(cmd, args, client, conversation, state):
             try:
                 conv_dir = state.config["conversations_dir"]
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
-                # The pairs recorded in the file draw the same newline after the
-                # closing thinking tag as the live stream (display only; the file is
-                # untrusted, so only well-formed pairs are used).
-                pairs = [p for p in loaded_conv.think_pairs if is_valid_think_pair(*p)]
-                display_cat_conversation(name, loaded_conv, loaded_model, think_pairs=pairs)
+                display_cat_conversation(name, loaded_conv, loaded_model)
             except FileNotFoundError:
                 display_error(f"No saved conversation named '{name}'.")
             except Exception as e:
@@ -440,8 +421,7 @@ def _auto_save(conversation, state):
             conv_dir,
             name=state.auto_save_name,
             model=state.model,
-            omit_think=_omit_think(state),
-            think_pairs=state.think_pairs_seen,
+            omit_thinking=_omit_thinking(state),
         )
     except OSError:
         pass
@@ -550,7 +530,7 @@ def main():
                         _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
                         _update_think_tags(state, chat_stream.think_tags)
                         response = display_assistant_stream(chat_stream, think_end=_think_end(state))
-                        conversation.add_assistant(response, model=_reply_model(chat_stream, state))
+                        _store_reply(conversation, response, chat_stream, state)
                         state.last_stats = chat_stream.stats
                         if state.show_stats:
                             display_stats(chat_stream.stats, state.context_length)
@@ -565,6 +545,9 @@ def main():
                     except ConnectionError:
                         display_error("Lost connection to llama-server. Is it still running?")
                         # Remove the unanswered user message
+                        conversation.messages.pop()
+                    except ThinkTagsError as e:
+                        display_error(str(e))
                         conversation.messages.pop()
                     except HTTPError as e:
                         display_error(f"llama-server error: {e}")

@@ -2,9 +2,9 @@ import ast
 import sys
 from pathlib import Path
 
-from conv2txt import convert, separate_thinking, think_ends, valid_think_pair
-from llama_client import is_valid_think_pair
-from ui import separate_thinking as ui_separate_thinking
+import conv2txt
+from conv2txt import convert
+from ui import THINK_DELIMITER
 
 
 def conversation(*assistant_models):
@@ -46,101 +46,45 @@ class TestModelAnnotation:
         assert text.count("[model:") == 1
 
 
-GEMMA_PAIR = ["<|channel>thought", "<channel|>"]
-
-
-def with_reply(reply, think_pairs=None):
+def with_reply(reply, thinking=None, extra=None):
+    assistant = {"role": "assistant", "content": reply}
+    if thinking is not None:
+        assistant["thinking"] = thinking
     data = {
         "model": "m",
         "system_prompt": "",
-        "messages": [
-            {"role": "user", "content": "q mentioning <channel|> literally"},
-            {"role": "assistant", "content": reply},
-        ],
+        "messages": [{"role": "user", "content": "q mentioning <channel|> literally"}, assistant],
     }
-    if think_pairs is not None:
-        data["think_pairs"] = think_pairs
+    data.update(extra or {})
     return data
 
 
 class TestThinkingSeparation:
-    def test_a_delimiter_is_added_after_a_recorded_closing_tag_and_survives_wrapping(self):
-        text = convert(with_reply("<|channel>thought\nwhy<channel|>The answer.", [GEMMA_PAIR]))
-        assert "why<channel|>\n\n***\n\nThe answer." in text
+    def test_thinking_is_written_before_the_content_with_a_delimiter(self):
+        text = convert(with_reply("The answer.", thinking="why"))
+        assert "why\n\n***\n\nThe answer." in text
+
+    def test_a_reply_that_was_only_thinking_ends_with_the_delimiter(self):
+        assert "only thinking\n\n***" in convert(with_reply("", thinking="only thinking"))
 
     def test_user_messages_are_never_touched(self):
-        text = convert(with_reply("a<channel|>b", [GEMMA_PAIR]))
+        text = convert(with_reply("b", thinking="a"))
         assert "q mentioning <channel|> literally" in text
 
-    def test_without_an_applicable_pair_the_output_is_exactly_as_before(self):
+    def test_without_thinking_the_output_is_exactly_the_content(self):
+        text = convert(with_reply("why<channel|>The answer."))
+        assert "why<channel|>The answer." in text
+        assert "***" not in text
+
+    def test_think_pairs_in_the_file_are_ignored(self):
         base = convert(with_reply("why<channel|>The answer."))
-        assert convert(with_reply("why<channel|>The answer.", [])) == base
-        assert convert(with_reply("why<channel|>The answer.", [["<think>", "</think>"]])) == base
-        assert "why<channel|>The answer." in base
-
-    def test_newlines_after_the_tag_are_absorbed_and_a_reply_ending_at_the_tag_gets_the_delimiter(self):
-        pairs = [["<think>", "</think>"]]
-        assert "why</think>\n\n***\n\nanswer" in convert(with_reply("why</think>\n\nanswer", pairs))
-        assert "only thinking</think>\n\n***" in convert(with_reply("only thinking</think>", pairs))
-
-    def test_malformed_think_pairs_are_ignored(self, subtests):
-        base = convert(with_reply("why<channel|>The answer."))
-        for raw in (
-            "<channel|>",
-            {"a": "b"},
-            None,
-            [["the", "The"]],
-            [["", ""]],
-            [["<a>", "so the answer is"]],
-            ["x"],
-            [[1, 2]],
-        ):
-            with subtests.test(raw=raw):
-                data = with_reply("why<channel|>The answer.")
-                data["think_pairs"] = raw
-                assert convert(data) == base
-
-    def test_at_most_sixteen_pairs_are_used(self):
-        raw = [[f"<t{i}>", f"</t{i}>"] for i in range(40)]
-        assert len(think_ends({"think_pairs": raw})) == 16
+        extra = {"think_pairs": [["<|channel>thought", "<channel|>"]]}
+        assert convert(with_reply("why<channel|>The answer.", extra=extra)) == base
 
 
 class TestStandaloneAndParity:
-    def test_separate_thinking_agrees_with_the_one_in_ui(self, subtests):
-        samples = [
-            ("why<channel|>144", ["<channel|>"]),
-            ("a</think>b</think>\nc</think>", ["</think>"]),
-            ("a</think>\n\nb</think></think>c", ["</think>"]),
-            ("a<channel|>b</think>c", ["<channel|>", "</think>"]),
-            ("a[/THINK]b", ["[/THINK]"]),
-            ("nothing here", ["<channel|>"]),
-            ("x<channel|>", ["<channel|>", ""]),
-        ]
-        for text, ends in samples:
-            with subtests.test(text=text):
-                assert separate_thinking(text, ends) == ui_separate_thinking(text, ends)
-
-    def test_the_pair_check_agrees_with_is_valid_think_pair(self, subtests):
-        pairs = [
-            ("<think>", "</think>"),
-            ("<|channel>thought", "<channel|>"),
-            ("<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"),
-            ("[THINK]", "[/THINK]"),
-            ("the", "the"),  # would put a newline after every "the"
-            ("", ""),
-            ("<think>", ""),
-            ("a b", "</x>"),
-            ("<x>", "so the answer is"),
-            ("<x>", "Answer:"),
-            ("<" + "a" * 58 + ">", "<" + "b" * 78 + ">"),  # exactly at the limits
-            ("<" + "a" * 59 + ">", "</x>"),
-            ("<x>", "<" + "b" * 79 + ">"),
-            (1, 2),
-            (None, "</x>"),
-        ]
-        for pair in pairs:
-            with subtests.test(pair=pair):
-                assert valid_think_pair(*pair) == is_valid_think_pair(*pair)
+    def test_the_delimiter_agrees_with_the_one_in_ui(self):
+        assert conv2txt.THINK_DELIMITER == THINK_DELIMITER
 
     def test_the_script_still_imports_only_the_standard_library(self):
         tree = ast.parse((Path(__file__).resolve().parent.parent / "conv2txt.py").read_text())

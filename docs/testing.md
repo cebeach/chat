@@ -211,7 +211,7 @@ checks it against the real models, once per selected profile, comparing with the
 | Test | What it checks |
 |---|---|
 | `test_detected_tags_match_the_model` | After `refresh()`, `LlamaClient.think_tags` equals the recorded pair, with source `detected`. For `[]` it must be `None` |
-| `test_a_real_reply_uses_the_tags` | A real chat reply (prompt `What is 17 + 25? Answer with just the number.`, seed 1, temperature 0, at most 1500 tokens) contains the end tag and begins with the start tag, and `strip_think()` leaves exactly `42`. For `[]` the reply is exactly `42` and contains none of the tags any profile records |
+| `test_a_real_reply_uses_the_tags` | A real chat reply (prompt `What is 17 + 25? Answer with just the number.`, seed 1, temperature 0, at most 1500 tokens) contains the end tag and begins with the start tag, and `split_think()` returns the answer `42` and a non-empty reasoning. For `[]` the reply is exactly `42` and contains none of the tags any profile records |
 
 The second test is what keeps the first from agreeing with itself. A forced-open template
 such as Qwen's ends the prompt with `<think>`, so the model never writes it and the app

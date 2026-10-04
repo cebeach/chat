@@ -10,7 +10,7 @@ unless a models directory is configured.
 
 import pytest
 
-from conversation import strip_think
+from conversation import split_think
 from tests import llama_server_config as cfg
 
 PROMPT = "What is 17 + 25? Answer with just the number."
@@ -72,5 +72,7 @@ def test_a_real_reply_uses_the_tags(llama_server, llama_client):
     # ends with it) the app re-emits it; for the others the model writes it.
     assert reply.startswith(start), reply[:80]
     assert reply.index(start) < reply.index(end)
-    # What the app saves with save_thinking off is the answer and nothing else.
-    assert strip_think(reply, [expected]) == ANSWER
+    # The reply splits into the reasoning and the answer alone.
+    thinking, content = split_think(reply, expected)
+    assert thinking
+    assert content == ANSWER

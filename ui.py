@@ -161,29 +161,14 @@ def _format_timestamp(iso_str):
 THINK_DELIMITER = "\n\n***\n\n"
 
 
-def separate_thinking(text, ends):
-    """Return text with THINK_DELIMITER after each closing thinking tag in `ends`.
-
-    The same rule as ThinkSeparator, for text that is already complete: every "\\n"
-    that directly follows the tag is absorbed into the delimiter. Empty tags are
-    ignored. Display only; callers keep the stored text.
-    """
-    for end in ends:
-        if end:
-            text = re.sub(re.escape(end) + r"\n*", lambda m: end + THINK_DELIMITER, text)
-    return text
-
-
-def display_cat_conversation(name, conversation, model, think_pairs=()):
+def display_cat_conversation(name, conversation, model):
     """Print a saved conversation's messages to the console.
 
-    think_pairs are the (start, end) thinking-tag pairs recorded in the file (the
-    caller validates them); a delimiter line is drawn after each closing tag in
-    assistant replies, as in the live REPL. Message text is escaped so that text that merely
-    looks like Rich markup (for example "[/THINK]" or "[/path]") prints literally
+    An assistant message's thinking is drawn first, then a delimiter line, then
+    its content, as in the live REPL (without the tags, which are not stored).
+    Message text is escaped so that text that merely looks like Rich markup (for example "[/THINK]" or "[/path]") prints literally
     instead of raising.
     """
-    ends = [end for _, end in think_pairs]
     console.print()
     console.print(f"[bold]Conversation:[/bold] {name}")
     if model:
@@ -210,7 +195,8 @@ def display_cat_conversation(name, conversation, model, think_pairs=()):
                 f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]"
                 f"{ts_display}{model_display}"
             )
-        content = separate_thinking(msg["content"], ends) if msg["role"] == "assistant" else msg["content"]
+        thinking = msg.get("thinking") if msg["role"] == "assistant" else None
+        content = f"{thinking}{THINK_DELIMITER}{msg['content']}" if thinking else msg["content"]
         console.print(escape(content))
         console.print()
 
