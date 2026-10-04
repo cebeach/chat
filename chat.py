@@ -27,6 +27,7 @@ from ui import (
     display_info,
     display_options,
     display_stats,
+    echo_suppressed,
     get_multiline_input,
     get_user_input,
     init_readline,
@@ -533,40 +534,43 @@ def main():
                 conversation.add_user(text)
                 send_to_model = True
 
-            if send_to_model:
-                try:
-                    chat_stream = client.chat(
-                        model=state.model,
-                        messages=conversation.get_messages(),
-                        options=state.options,
-                    )
-                    # Before the reply is shown and before any autosave and context
-                    # warning, so they already know this model, its context length
-                    # and its tags.
-                    _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
-                    _update_think_tags(state, chat_stream.think_tags)
-                    response = display_assistant_stream(chat_stream, think_end=_think_end(state))
-                    conversation.add_assistant(response, model=_reply_model(chat_stream, state))
-                    state.last_stats = chat_stream.stats
-                    if state.show_stats:
-                        display_stats(chat_stream.stats, state.context_length)
-                    # Context window warning
-                    used_tokens = chat_stream.stats.get("context_tokens", 0)
-                    if _near_context_limit(used_tokens, state.context_length):
-                        display_context_warning(used_tokens, state.context_length)
-                    _auto_save(conversation, state)
-                except KeyboardInterrupt:
-                    console.print()
-                    display_info("Response interrupted.")
-                except ConnectionError:
-                    display_error("Lost connection to llama-server. Is it still running?")
-                    # Remove the unanswered user message
-                    conversation.messages.pop()
-                except HTTPError as e:
-                    display_error(f"llama-server error: {e}")
-                    conversation.messages.pop()
+            # Echo is off for the whole turn (request, reply, stats, autosave) and comes back
+            # just before the next prompt: readline entered with ECHO off draws nothing.
+            with echo_suppressed():
+                if send_to_model:
+                    try:
+                        chat_stream = client.chat(
+                            model=state.model,
+                            messages=conversation.get_messages(),
+                            options=state.options,
+                        )
+                        # Before the reply is shown and before any autosave and context
+                        # warning, so they already know this model, its context length
+                        # and its tags.
+                        _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
+                        _update_think_tags(state, chat_stream.think_tags)
+                        response = display_assistant_stream(chat_stream, think_end=_think_end(state))
+                        conversation.add_assistant(response, model=_reply_model(chat_stream, state))
+                        state.last_stats = chat_stream.stats
+                        if state.show_stats:
+                            display_stats(chat_stream.stats, state.context_length)
+                        # Context window warning
+                        used_tokens = chat_stream.stats.get("context_tokens", 0)
+                        if _near_context_limit(used_tokens, state.context_length):
+                            display_context_warning(used_tokens, state.context_length)
+                        _auto_save(conversation, state)
+                    except KeyboardInterrupt:
+                        console.print()
+                        display_info("Response interrupted.")
+                    except ConnectionError:
+                        display_error("Lost connection to llama-server. Is it still running?")
+                        # Remove the unanswered user message
+                        conversation.messages.pop()
+                    except HTTPError as e:
+                        display_error(f"llama-server error: {e}")
+                        conversation.messages.pop()
 
-            console.print()
+                console.print()
     finally:
         _auto_save(conversation, state)
         save_readline_history()

@@ -1,8 +1,8 @@
 # Entering text
 
 ## Sending a message
-Type and press Enter. The prompt is `>>> ` with a grey hint that disappears as soon
-as you start typing. An empty line does nothing.
+Type and press Enter. The prompt is a plain `>>> `; type `/?` for the list of commands.
+An empty line does nothing.
 
 | Key | Effect |
 |---|---|
@@ -45,4 +45,24 @@ and is available with the arrow keys in later sessions.
 ## Stopping a reply
 Ctrl-C while a reply is streaming stops it and returns to the prompt. The part
 received so far is kept in the conversation, with ` [interrupted]` appended, and no
-stats line is shown. Use `/retry` to ask again.
+stats line is shown. Use `/retry` to ask again. Ctrl-C during the short wait before the
+reply starts prints "Response interrupted." instead.
+
+## Typing while a reply is on its way
+Keys you type while the model is answering are not shown and are not sent: they are
+discarded when the next prompt appears (so a stray Enter or a paste during a reply
+never sends a message). This applies to model replies only; while a command such as
+`/cat` prints, typed keys are still echoed. For the same reason Ctrl-C during a reply
+does not print `^C`.
+
+The terminal's echo is switched off for the length of a reply and back on before the
+next prompt. If the app is killed by a signal during a reply (`kill`, closing the
+window), the terminal can be left with echo off: type `stty sane` (or `reset`) and
+press Enter to get it back.
+
+## Other notes
+- Input piped into the app (`echo hi | python chat.py`) is read line by line.
+- Ctrl-Z suspends the app, and `fg` resumes it. If you suspended it at the prompt, the
+  prompt and the text typed so far are drawn again on `fg`. The cursor goes to the end of
+  that text, so if it was in the middle of the line, further edits are drawn a few columns
+  off until you press Enter.

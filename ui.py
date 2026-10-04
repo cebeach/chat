@@ -1,10 +1,9 @@
-import os
+import contextlib
 import re
 import readline
 import signal
 import sys
 import termios
-import tty
 from datetime import datetime
 from pathlib import Path
 
@@ -414,73 +413,91 @@ def save_readline_history():
         pass
 
 
-def get_user_input():
-    """Prompt the user for input with a placeholder.
+# Readline prompt: bold green >>>, with the ANSI codes wrapped in \x01/\x02 so readline
+# measures the visible width correctly.
+PROMPT = "\x01\033[1;32m\x02>>> \x01\033[0m\x02"
 
-    Shows: >>> Send a message (/? for help)
-    Placeholder is grey and disappears as soon as the user types.
+
+def _discard_pending_input():
+    """Drop keys typed while a reply was streaming, so they are not submitted."""
+    if sys.stdin.isatty():
+        try:
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        except termios.error:
+            pass
+
+
+def _redraw_after_resume(signum, frame):
+    """Ctrl-Z then fg at the prompt: draw the prompt and the line being typed again.
+
+    Python runs readline with its own signal handling off (readline.c: rl_catch_signals = 0), and
+    readline redraws incrementally, so after the shell has taken over the screen it still believes
+    its prompt is visible and shows it only at the next new line. SIGWINCH cannot be used to force a
+    redraw (rl_resize_terminal() redraws only if the size changed), and the readline module has no
+    forced redisplay, so this writes the visible prompt and the line buffer on a cleared row. The
+    cursor ends at the end of the line: if it was mid-line, later edits are drawn a few columns off.
+    """
+    sys.stdout.write("\r\033[K" + re.sub("[\x01\x02]", "", PROMPT) + readline.get_line_buffer())
+    sys.stdout.flush()
+
+
+def get_user_input():
+    """Prompt the user for input. Readline reads every key itself.
+
+    Shows: >>>
     Ctrl-C clears the current line and re-prompts.
     Returns None on EOF (Ctrl-D).
     """
-    PROMPT = ">>> "
-    PLACEHOLDER = "Send a message (/? for help)"
-
-    # Readline prompt: bold green >>>, with ANSI codes wrapped in \x01/\x02
-    # so readline correctly calculates visible width.
-    rl_prompt = f"\x01\033[1;32m\x02{PROMPT}\x01\033[0m\x02"
-
+    _discard_pending_input()  # once per call, so a re-prompt after Ctrl-C keeps what is typed next
     while True:
-        # Print prompt and placeholder
-        sys.stdout.write(f"\033[1;32m{PROMPT}\033[0m")
-        sys.stdout.write(f"\033[90m{PLACEHOLDER}\033[0m")
-        sys.stdout.write(f"\033[{len(PLACEHOLDER)}D")
-        sys.stdout.flush()
-
-        # Read one character in raw mode to detect first keystroke
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
+        # Only while waiting at the prompt: a SIGCONT at any other time needs no redraw.
+        previous = signal.signal(signal.SIGCONT, _redraw_after_resume) or signal.SIG_DFL
         try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-        # Erase the entire prompt + placeholder line, reposition cursor
-        sys.stdout.write("\r\033[K")
-        sys.stdout.flush()
-
-        if ch == "\x03":  # Ctrl-C
-            print()
-            continue
-        if ch == "\x04":  # Ctrl-D
-            print()
-            return None
-        if ch == "\x1a":  # Ctrl-Z — background the process
-            print()
-            os.kill(os.getpid(), signal.SIGTSTP)
-            continue
-        if ch == "\r" or ch == "\n":  # Enter with no input
-            print()
-            return ""
-
-        # Insert the first character into readline's editing buffer via
-        # pre_input_hook so it appears as part of the editable line.
-        # Using insert_text + redisplay avoids the terminal-echo race
-        # condition that stuff_char can trigger.
-        def insert_char():
-            readline.insert_text(ch)
-            readline.redisplay()
-            readline.set_pre_input_hook(None)
-
-        readline.set_pre_input_hook(insert_char)
-
-        try:
-            return input(rl_prompt)
+            return input(PROMPT)
         except KeyboardInterrupt:
             print()
-            continue
         except EOFError:
+            print()
             return None
+        finally:
+            signal.signal(signal.SIGCONT, previous)
+
+
+def _set_tty(fd, attrs):
+    """Apply attrs now. A Ctrl-C that lands during the call must not skip it; any tty error is ignored."""
+    while True:
+        try:
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+            return
+        except KeyboardInterrupt:  # retry; the interrupt is dropped (at exit the turn is ending anyway;
+            continue  # at entry the user has to press Ctrl-C again)
+        except termios.error:  # nothing useful to do; must not replace the caller's own exception
+            return
+
+
+@contextlib.contextmanager
+def echo_suppressed():
+    """Keep the tty from echoing keys typed during a turn. Restored on every exit that runs `finally`.
+
+    Readline entered with ECHO off draws none of the line being typed, so this must be
+    left before the next prompt, never held across input().
+    """
+    if not sys.stdin.isatty():
+        yield
+        return
+    fd = sys.stdin.fileno()
+    try:
+        saved = termios.tcgetattr(fd)
+    except termios.error:
+        yield
+        return
+    quiet = list(saved)
+    quiet[3] &= ~termios.ECHO  # c_lflag; ICANON and ISIG stay as found
+    try:
+        _set_tty(fd, quiet)
+        yield
+    finally:
+        _set_tty(fd, saved)
 
 
 def get_multiline_input():
