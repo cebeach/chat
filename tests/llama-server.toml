@@ -27,7 +27,7 @@ args = [
     "--log-timestamps",
 ]
 
-[models.qwen35-2b-q8_0]
+[models.qwen35-2B-Q8_0]
 file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
 chat_template = "qwen3.5.jinja"    # tests/chat-templates/qwen3.5.jinja
 vram_mb = 2153                     # memory this profile uses with its exact args, measured on your GPU
@@ -43,8 +43,8 @@ vram_mb = 2666
 think_tags = ["<|channel>thought", "<channel|>"]
 source_url = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf"
 
-[models.openai_gpt-oss-20b-MXFP4]
-file = "openai_gpt-oss-20b-MXFP4.gguf"
+[models.gpt-oss-20b-MXFP4]
+file = "gpt-oss-20b-MXFP4.gguf"
 vram_mb = 9667
 think_tags = ["<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"]
 source_url = "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf"

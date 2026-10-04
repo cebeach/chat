@@ -68,7 +68,7 @@ comma-separated list, or `all`, taken in order of precedence from:
 ```bash
 venv/bin/python -m pytest -m integration                                   # the first profile
 venv/bin/python -m pytest -m integration --llama-model gemma-4-E2B-it-Q8_0  # one named profile
-venv/bin/python -m pytest -m integration --llama-model "qwen35-2b-q8_0,gemma-4-E2B-it-Q8_0"
+venv/bin/python -m pytest -m integration --llama-model "qwen35-2B-Q8_0,gemma-4-E2B-it-Q8_0"
 venv/bin/python -m pytest -m integration --llama-model all                  # every profile
 ```
 
