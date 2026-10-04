@@ -6,6 +6,8 @@ docs/testing.md.
 """
 
 import os
+import re
+import shlex
 import shutil
 import socket
 import tomllib
@@ -21,8 +23,12 @@ HOST = "127.0.0.1"
 LLAMA_TEST_PORT = 8001
 DEFAULT_STARTUP_TIMEOUT = 120
 
-# Flags the fixture sets itself; a profile may not set them (short forms included).
-RESERVED_ARGS = frozenset({"model", "m", "host", "port"})
+# Flags the fixture sets itself (-m, --host, --port); [defaults] and a profile may not.
+RESERVED_FLAGS = frozenset({"-m", "--model", "--host", "--port"})
+
+# A flag as written to llama-server: one or two dashes, then a letter. This accepts both
+# flavors (-ngl, --n-gpu-layers) and rejects a bare name (ctx-size) and a number (-1).
+FLAG_RE = re.compile(r"--?[A-Za-z][^\s]*")
 
 
 class NotConfigured(Exception):
@@ -37,7 +43,7 @@ class LlamaTestConfigError(Exception):
 class Profile:
     name: str
     file: str
-    args: dict = field(default_factory=dict)  # [defaults.args] already merged under the profile's
+    args: list = field(default_factory=list)  # defaults merged under the profile's; one token tuple per flag
     chat_template: str | None = None
     chat_template_path: Path | None = None
     vram_mb: int | None = None
@@ -96,23 +102,70 @@ def _positive_number(value, where):
     return value
 
 
-def _check_args(args, where):
-    if not isinstance(args, dict):
-        raise LlamaTestConfigError(f"{where} must be a table of flag = value")
-    for key, value in args.items():
-        flag = key.lstrip("-")
-        if not flag:
-            raise LlamaTestConfigError(f"empty flag name in {where}")
-        if flag in RESERVED_ARGS:
+def _flag_name(tokens):
+    """The flag exactly as spelled, without a trailing =value (--ctx-size=4096 -> --ctx-size)."""
+    first = tokens[0]
+    return first.split("=", 1)[0] if first.startswith("--") else first
+
+
+def _split_flag(item, where):
+    """One string written as you would type it to llama-server -> its tokens.
+
+    The first token is the flag and must start with a dash (either flavor); the rest are
+    its value(s). Whether llama-server knows the flag is not checked.
+    """
+    if not isinstance(item, str):
+        raise LlamaTestConfigError(f"{where}: every element must be a string, got {item!r}")
+    try:
+        tokens = shlex.split(item)
+    except ValueError as exc:
+        raise LlamaTestConfigError(f"{where}: cannot split {item!r}: {exc}") from None
+    if not tokens or not FLAG_RE.fullmatch(tokens[0]):
+        raise LlamaTestConfigError(
+            f"{where}: {item!r} does not start with a flag; write it as you would type it to "
+            "llama-server, for example '--ctx-size 4096' or '-c 4096'"
+        )
+    return tuple(tokens)
+
+
+def _parse_flags(value, where):
+    """A list of strings, one llama-server flag (and its value) each -> a list of token tuples."""
+    if not isinstance(value, list):
+        raise LlamaTestConfigError(f"{where} must be a list of strings, one flag per element")
+    parsed = []
+    for item in value:
+        tokens = _split_flag(item, where)
+        if _flag_name(tokens) in RESERVED_FLAGS:
             raise LlamaTestConfigError(
-                f"{key!r} in {where} is set by the fixture (model, host and port are reserved)"
+                f"{item!r} in {where} is set by the fixture (-m/--model, --host and --port are reserved)"
             )
-        items = value if isinstance(value, list) else [value]
-        for item in items:
-            if isinstance(item, bool) and isinstance(value, list):
-                raise LlamaTestConfigError(f"{key!r} in {where}: booleans are not allowed in a list")
-            if not isinstance(item, bool | int | float | str):
-                raise LlamaTestConfigError(f"{key!r} in {where} has an unsupported value: {value!r}")
+        parsed.append(tokens)
+    return parsed
+
+
+def _parse_remove(value, where, default_names):
+    """Flags to drop from [defaults] for one profile, spelled exactly as the default spells them."""
+    if not isinstance(value, list):
+        raise LlamaTestConfigError(f"{where} must be a list of flags")
+    names = set()
+    for item in value:
+        tokens = _split_flag(item, where)
+        if len(tokens) != 1:
+            raise LlamaTestConfigError(f"{where}: {item!r} must be just the flag, with no value")
+        if tokens[0] not in default_names:
+            raise LlamaTestConfigError(
+                f"{where}: {item!r} matches no flag in [defaults] args. Spell it exactly as the "
+                "default does: aliases such as -c and --ctx-size are not matched."
+            )
+        names.add(tokens[0])
+    return names
+
+
+def _merge(default_args, own_args, removed):
+    """Defaults minus removed ones and ones the profile spells again, then the profile's own."""
+    own_names = {_flag_name(tokens) for tokens in own_args}
+    kept = [t for t in default_args if _flag_name(t) not in own_names and _flag_name(t) not in removed]
+    return kept + own_args
 
 
 def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
@@ -121,6 +174,10 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
     Unknown keys, a bad type, a reserved flag, a bad chat_template or an empty `models`
     table are errors naming the problem. Whether the flags in `args` make sense for
     llama-server is not checked: that is the developer's responsibility.
+
+    `args` is a list of strings, one flag per element, written as you would type it to
+    llama-server. A profile's flags replace a default spelled with the same flag; aliases
+    (-c and --ctx-size) are not matched, so `remove` names defaults to drop.
     """
     raw = _read_toml(path, "profiles file")
     where_file = Path(path).name
@@ -130,8 +187,8 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
     if not isinstance(defaults, dict):
         raise LlamaTestConfigError(f"[defaults] in {where_file} must be a table")
     _check_keys(defaults, {"args"}, f"[defaults] in {where_file}")
-    default_args = defaults.get("args", {})
-    _check_args(default_args, f"[defaults.args] in {where_file}")
+    default_args = _parse_flags(defaults.get("args", []), f"[defaults] args in {where_file}")
+    default_names = {_flag_name(tokens) for tokens in default_args}
 
     models = raw.get("models")
     if not isinstance(models, dict) or not models:
@@ -142,14 +199,14 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
         where = f"profile {name!r}"
         if not isinstance(table, dict):
             raise LlamaTestConfigError(f"{where} must be a table")
-        _check_keys(table, {"file", "args", "chat_template", "vram_mb", "startup_timeout"}, where)
+        _check_keys(table, {"file", "args", "remove", "chat_template", "vram_mb", "startup_timeout"}, where)
         file = table.get("file")
         if not isinstance(file, str) or not file:
             raise LlamaTestConfigError(f"{where} needs a `file` (the GGUF filename)")
-        args = table.get("args", {})
-        _check_args(args, f"{where} args")
+        own_args = _parse_flags(table.get("args", []), f"args in {where}")
+        removed = _parse_remove(table.get("remove", []), f"remove in {where}", default_names)
 
-        profile = Profile(name=name, file=file, args={**default_args, **args})
+        profile = Profile(name=name, file=file, args=_merge(default_args, own_args, removed))
         if "vram_mb" in table:
             profile.vram_mb = _positive_int(table["vram_mb"], f"vram_mb in {where}")
         if "startup_timeout" in table:
@@ -280,22 +337,6 @@ def resolve_setup(
     return Setup(binary, models_dir, gguf, profile, startup_timeout)
 
 
-def _flags(args):
-    out = []
-    for key, value in args.items():
-        flag = key if key.startswith("-") else ("-" + key if len(key) == 1 else "--" + key)
-        if value is True:
-            out.append(flag)
-        elif value is False:
-            continue
-        elif isinstance(value, list):
-            for item in value:
-                out += [flag, str(item)]
-        else:
-            out += [flag, str(value)]
-    return out
-
-
 def build_argv(profile, models_dir, port=None):
     """The llama-server arguments (without the binary) for a profile.
 
@@ -305,7 +346,7 @@ def build_argv(profile, models_dir, port=None):
     """
     if port is None:
         port = LLAMA_TEST_PORT
-    argv = _flags(profile.args)
+    argv = [token for tokens in profile.args for token in tokens]
     if profile.chat_template_path:
         argv += ["--chat-template-file", str(profile.chat_template_path)]
     argv += ["-m", str(Path(models_dir) / profile.file), "--host", HOST, "--port", str(port)]

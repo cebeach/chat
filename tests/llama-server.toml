@@ -4,12 +4,31 @@
 # `file` is a GGUF filename inside your models directory (models_dir in
 # tests/llama-server.local.toml, or $LLAMA_TEST_MODEL_DIR). The fixture sets -m, --host and
 # --port itself.
+#
+# `args` is a list with one llama-server flag per element, written exactly as you would type
+# it to llama-server, with either dash flavor (-ngl 99 or --n-gpu-layers 99). A profile's
+# `args` replace any default spelled with the same flag; aliases are not matched.
 
-[defaults.args]                    # flag name (without --) -> value, for every profile
-ctx-size = 4096
-n-gpu-layers = 99
-no-webui = true
+[defaults]
+args = [
+    "--jinja",
+    "--ctx-size 4096",
+    "--n-gpu-layers 99",
+    "--no-webui",
+    "--flash-attn on",
+    "--cache-type-k q8_0",
+    "--cache-type-v q8_0",
+    "--batch-size 4096",
+    "--ubatch-size 1024",
+    "--kv-unified",
+    "--log-prefix",
+    "--log-verbose",
+    "--log-timestamps",
+]
 
-[models.qwen3-5-2b]
+[models.qwen35-2b-q8_0]
 file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
 chat_template = "qwen3.5.jinja"    # tests/chat-templates/qwen3.5.jinja
+# args = [                         # flags for this model only, merged over the defaults
+#     "--ctx-size 8192",
+# ]

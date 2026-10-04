@@ -7,6 +7,7 @@ tmp_path, the environment is a plain dict, and "a server" is a stand-in script r
 ephemeral port. See docs/testing.md.
 """
 
+import json
 import socket
 import sys
 import textwrap
@@ -23,19 +24,25 @@ from tests.llama_server_config import LlamaTestConfigError, NotConfigured
 from tests.llama_server_process import LlamaStartError, RunningServer
 
 PROFILES = """
-[defaults.args]
-ctx-size = 4096
-no-webui = true
-verbose = false
+[defaults]
+args = [
+    "--ctx-size 4096",
+    "--no-webui",
+    "-fa on",
+    "--log-prefix",
+    "-ngl 99",
+]
 
 [models.alpha]
 file = "alpha.gguf"
 vram_mb = 100
-[models.alpha.args]
-ctx-size = 8192
-temp = 0.5
-lora = ["a.bin", "b.bin"]
-c = 1
+args = [
+    "--ctx-size 8192",
+    "--temp 0.5",
+    "--lora a.bin",
+    "--lora b.bin",
+]
+remove = ["--log-prefix"]
 
 [models.beta]
 file = "beta.gguf"
@@ -95,19 +102,26 @@ def free_url():
 
 
 class TestBuildArgv:
-    def test_merge_and_flag_forms(self, files):
+    def test_merge_order_and_both_dash_flavors(self, files):
         profile = cfg.select_profile(load(files), "alpha")
         argv = cfg.build_argv(profile, files["models"], port=9999)
-        assert argv.count("--ctx-size") == 1
-        assert argv[argv.index("--ctx-size") + 1] == "8192"  # the profile wins over [defaults.args]
-        assert "--no-webui" in argv  # true -> bare flag
-        assert "--verbose" not in argv  # false -> dropped
-        assert argv[argv.index("--temp") + 1] == "0.5"
-        assert [argv[i + 1] for i, a in enumerate(argv) if a == "--lora"] == [
+        # kept defaults first (-fa and -ngl are the single-dash flavor), then the profile's own,
+        # in order; --ctx-size 4096 was replaced and --log-prefix removed.
+        assert argv[:-6] == [
+            "--no-webui",
+            "-fa",
+            "on",
+            "-ngl",
+            "99",
+            "--ctx-size",
+            "8192",
+            "--temp",
+            "0.5",
+            "--lora",
             "a.bin",
+            "--lora",
             "b.bin",
-        ]  # lists repeat
-        assert argv[argv.index("-c") + 1] == "1"  # single-letter keys become -k
+        ]
 
     def test_ends_with_model_host_port(self, files):
         profile = cfg.select_profile(load(files), "alpha")
@@ -134,13 +148,62 @@ class TestBuildArgv:
         monkeypatch.setattr(cfg, "LLAMA_TEST_PORT", 12345)
         assert cfg.build_argv(profile, files["models"])[-1] == "12345"
 
+    @staticmethod
+    def argv_for(files, defaults, args=(), remove=()):
+        """argv (without the fixture's -m/--host/--port tail) for a one-profile config."""
+        # JSON string syntax is valid TOML, so quotes inside a flag survive.
+        text = (
+            f"[defaults]\nargs = {json.dumps(list(defaults))}\n"
+            f'[models.a]\nfile = "a.gguf"\nargs = {json.dumps(list(args))}\n'
+            f"remove = {json.dumps(list(remove))}\n"
+        )
+        return cfg.build_argv(load(files, text).profiles["a"], files["models"], port=1)[:-6]
+
+    def test_a_profile_replaces_a_default_spelled_the_same(self, files, subtests):
+        cases = {
+            "long flavor": (["--ctx-size 4096"], ["--ctx-size 8192"], ["--ctx-size", "8192"]),
+            "short flavor": (["-c 4096"], ["-c 8192"], ["-c", "8192"]),
+            "=value form": (["--ctx-size 4096"], ["--ctx-size=8192"], ["--ctx-size=8192"]),
+            "bare flag": (["--kv-unified"], ["--kv-unified"], ["--kv-unified"]),
+        }
+        for name, (defaults, args, expected) in cases.items():
+            with subtests.test(name):
+                assert self.argv_for(files, defaults, args) == expected
+
+    def test_aliases_and_negatives_are_not_inferred(self, files, subtests):
+        """-c and --ctx-size, --x and --no-x, -no-kvu: all different spellings, all kept."""
+        cases = {
+            "alias": (["--ctx-size 4096"], ["-c 8192"], ["--ctx-size", "4096", "-c", "8192"]),
+            "--no- form": (["--log-prefix"], ["--no-log-prefix"], ["--log-prefix", "--no-log-prefix"]),
+            "-no- form": (["--kv-unified"], ["-no-kvu"], ["--kv-unified", "-no-kvu"]),
+            "--no-host is not --host": (["--ctx-size 1"], ["--no-host"], ["--ctx-size", "1", "--no-host"]),
+        }
+        for name, (defaults, args, expected) in cases.items():
+            with subtests.test(name):
+                assert self.argv_for(files, defaults, args) == expected
+
+    def test_remove_drops_a_default_exactly_as_spelled(self, files):
+        argv = self.argv_for(
+            files, ["--log-prefix", "--ctx-size 4096"], ["--no-log-prefix"], ["--log-prefix"]
+        )
+        assert argv == ["--ctx-size", "4096", "--no-log-prefix"]
+
+    def test_repeated_flags_and_quoting(self, files):
+        argv = self.argv_for(files, ["--lora d.bin"], ["--lora a.bin", "--lora 'my file.bin'", "--seed -1"])
+        assert argv == ["--lora", "a.bin", "--lora", "my file.bin", "--seed", "-1"]  # the profile's replace
+
+    def test_template_flags_in_args_pass_through(self, files):
+        text = '[models.a]\nfile = "a"\nchat_template = "beta.jinja"\nargs = ["--jinja", "--chat-template chatml"]\n'
+        argv = cfg.build_argv(load(files, text).profiles["a"], files["models"], port=1)
+        assert "--jinja" in argv and "chatml" in argv  # not judged: the developer owns the flags
+
     def test_reserved_flags_are_rejected(self, files, subtests):
-        for flag in ("model", "m", "host", "port", "--port"):
-            for table in ("[defaults.args]", "[models.alpha.args]"):
-                with subtests.test(flag=flag, table=table):
-                    text = f'{table}\n"{flag}" = "x"\n[models.alpha]\nfile = "alpha.gguf"\n'
-                    if table.startswith("[models"):
-                        text = f'[models.alpha]\nfile = "alpha.gguf"\n[models.alpha.args]\n"{flag}" = "x"\n'
+        for item in ("-m x.gguf", "--model x.gguf", "--host 0.0.0.0", "--port 9", "--port=9"):
+            for text in (
+                f'[defaults]\nargs = ["{item}"]\n[models.a]\nfile = "a"\n',
+                f'[models.a]\nfile = "a"\nargs = ["{item}"]\n',
+            ):
+                with subtests.test(item=item, where=text.splitlines()[0]):
                     with pytest.raises(LlamaTestConfigError, match="set by the fixture"):
                         load(files, text)
 
@@ -157,7 +220,7 @@ class TestLoadConfig:
         "text, match",
         [
             ('bogus = 1\n[models.a]\nfile = "a"\n', "unknown key 'bogus'"),
-            ('[defaults]\nargz = {}\n[models.a]\nfile = "a"\n', "unknown key 'argz'"),
+            ('[defaults]\nargz = []\n[models.a]\nfile = "a"\n', "unknown key 'argz'"),
             ('[models.a]\nfile = "a"\nchat_templat = "x"\n', "unknown key 'chat_templat'"),
             ("", "no profiles defined"),
             ("[models]\n", "no profiles defined"),
@@ -168,8 +231,32 @@ class TestLoadConfig:
             ('[models.a]\nfile = "a"\nstartup_timeout = -1\n', "positive number"),
             ('[models.a]\nfile = "a"\nchat_template = "../x.jinja"\n', "plain filename"),
             ('[models.a]\nfile = "a"\nchat_template = "missing.jinja"\n', "does not exist"),
-            ('[models.a]\nfile = "a"\n[models.a.args]\nx = {y = 1}\n', "unsupported value"),
             ("[models.a\n", "not valid TOML"),
+            # the args list
+            ('[defaults.args]\nctx-size = 4096\n[models.a]\nfile = "a"\n', "must be a list of strings"),
+            ('[models.a]\nfile = "a"\nargs = "--ctx-size 1"\n', "must be a list of strings"),
+            ('[models.a]\nfile = "a"\nargs = [5]\n', "must be a string, got 5"),
+            (
+                '[models.a]\nfile = "a"\nargs = ["ctx-size 4096"]\n',
+                "'ctx-size 4096' does not start with a flag",
+            ),
+            ('[models.a]\nfile = "a"\nargs = ["-1"]\n', "does not start with a flag"),
+            ('[models.a]\nfile = "a"\nargs = [""]\n', "does not start with a flag"),
+            ('[models.a]\nfile = "a"\nargs = ["--lora \'unclosed"]\n', "cannot split"),
+            # remove
+            (
+                '[defaults]\nargs = ["--ctx-size 1"]\n[models.a]\nfile = "a"\nremove = "--ctx-size"\n',
+                "must be a list",
+            ),
+            (
+                '[defaults]\nargs = ["--ctx-size 1"]\n[models.a]\nfile = "a"\nremove = ["-c"]\n',
+                "matches no flag in \\[defaults\\]",
+            ),
+            ('[models.a]\nfile = "a"\nremove = ["--ctx-size"]\n', "matches no flag in \\[defaults\\]"),
+            (
+                '[defaults]\nargs = ["--ctx-size 1"]\n[models.a]\nfile = "a"\nremove = ["--ctx-size 1"]\n',
+                "just the flag",
+            ),
         ],
     )
     def test_errors_name_the_problem(self, files, text, match):
@@ -179,11 +266,6 @@ class TestLoadConfig:
     def test_missing_file(self, files):
         with pytest.raises(LlamaTestConfigError, match="not found"):
             cfg.load_config(files["committed"].parent / "nope.toml", files["templates"])
-
-    def test_template_flags_in_args_pass_through(self, files):
-        text = '[models.a]\nfile = "a"\nchat_template = "beta.jinja"\n[models.a.args]\njinja = true\nchat-template = "chatml"\n'
-        argv = cfg.build_argv(load(files, text).profiles["a"], files["models"], port=1)
-        assert "--jinja" in argv and "chatml" in argv  # not judged: the developer owns the flags
 
     def test_vram_budget_is_not_compared(self, files):
         files["local"].write_text("[budget]\nvram_mb = 10\n")

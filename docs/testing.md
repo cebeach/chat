@@ -75,26 +75,32 @@ This file is committed, so the arguments for each model are reviewed and version
 code. Each profile names a GGUF file and the llama-server flags it needs.
 
 ```toml
-[defaults.args]                    # flag name (without --) -> value, for every profile
-ctx-size = 4096
-n-gpu-layers = 99
-no-webui = true
+[defaults]
+args = [                           # one llama-server flag per element, for every profile
+    "--ctx-size 4096",
+    "--n-gpu-layers 99",
+    "--flash-attn on",
+    "--no-webui",
+    "--log-prefix",
+]
 
 [models.my-model]                  # the profile name, as used by --llama-model
 file = "My-Model-Q4_K_M.gguf"      # a filename inside models_dir
 vram_mb = 6200                     # optional: measured memory use with these args
 startup_timeout = 180              # optional: seconds to wait for this model to load
 chat_template = "my-model.jinja"   # optional: a file in tests/chat-templates/
-[models.my-model.args]
-ctx-size = 8192                    # overrides the default above
-reasoning-format = "none"
+args = [                           # flags for this model, merged over the defaults
+    "--ctx-size 8192",             # replaces the default above
+    "--reasoning-format none",
+]
+remove = ["--log-prefix"]          # optional: drop a default (see below)
 ```
 
 | Key | Where | Meaning |
 |---|---|---|
-| `[defaults.args]` | top level | Flags added to every profile. A profile's `args` win |
+| `args` | `[defaults]` and each profile | A list of strings, one llama-server flag per element |
 | `file` | profile, required | GGUF filename, relative to your models directory |
-| `args` | profile | Flags for this model, merged over `[defaults.args]` |
+| `remove` | profile | Defaults to leave out for this profile; see [Overriding a default](#overriding-a-default) |
 | `chat_template` | profile | Template file in `tests/chat-templates/`; see [Chat templates](#chat-templates) |
 | `vram_mb` | profile | Positive integer. Accepted and checked, not used yet (see [Parallel servers](#parallel-servers-not-supported-yet)) |
 | `startup_timeout` | profile | Positive number of seconds. Beats the local file's value |
@@ -102,28 +108,71 @@ reasoning-format = "none"
 Any other key is an error that names it, so a typo cannot quietly launch the wrong
 command. At least one profile is required.
 
-How `args` become flags:
+### Writing the flags
 
-| In the file | On the command line |
+Write each element exactly as you would type it to llama-server. The first word is the
+flag and the rest is its value. Both dash flavors work, so `"-ngl 99"` and
+`"--n-gpu-layers 99"` are both fine, and the text goes to llama-server as written.
+
+| Element | Command line |
 |---|---|
-| `ctx-size = 4096` | `--ctx-size 4096` |
-| `c = 4096` | `-c 4096` (one-letter names get one dash) |
-| `no-webui = true` | `--no-webui` |
-| `verbose = false` | nothing (it only cancels a flag from `[defaults.args]`) |
-| `lora = ["a.bin", "b.bin"]` | `--lora a.bin --lora b.bin` |
+| `"--ctx-size 4096"` | `--ctx-size 4096` |
+| `"-c 4096"` | `-c 4096` |
+| `"--kv-unified"` | `--kv-unified` (a flag with no value) |
+| `"--no-log-prefix"` | `--no-log-prefix` |
+| `"--lora a.bin"`, `"--lora b.bin"` | `--lora a.bin --lora b.bin` (repeat the flag) |
+| `"--lora 'my file.bin'"` | `--lora "my file.bin"` (shell quoting is understood) |
 
-`false` does not switch off something llama-server does by default. Use the negated flag
-for that, such as `no-webui = true`.
+An element that does not start with a dash, such as `"ctx-size 4096"`, is an error
+naming it. Nothing else about the flags is checked. **The fixture does not know which
+flags llama-server accepts**, and you are expected to know llama-server. If a flag is
+wrong, the server fails to start and the test fails with a pointer to its log (see
+[When the server does not start](#when-the-server-does-not-start)). `llama-server --help`
+lists the flags and their aliases.
 
-The fixture sets `-m` (the model), `--host 127.0.0.1` and `--port 8001` itself, so a
-profile may not set `model`, `m`, `host` or `port`.
+The fixture sets `-m` (the model), `--host 127.0.0.1` and `--port 8001` itself, so
+`args` may not contain `-m`, `--model`, `--host` or `--port`.
 
-**The fixture does not check your flags.** You are expected to know llama-server. If a
-combination is wrong, the server fails to start and the test fails with a pointer to its
-log (see [When the server does not start](#when-the-server-does-not-start)).
+### Overriding a default
+
+A profile's `args` are added after the defaults. If a profile lists a flag that a default
+also lists, **spelled the same way**, the default is dropped:
+
+```toml
+[defaults]
+args = ["--ctx-size 4096", "--log-prefix"]
+
+[models.big]
+file = "big.gguf"
+args = ["--ctx-size 8192"]    # --ctx-size 4096 is dropped; --log-prefix stays
+```
+
+Spelling matters, because the fixture does not know llama-server's aliases:
+
+- `"-c 8192"` does **not** replace a default `"--ctx-size 4096"`. Both reach llama-server.
+  Use the same spelling as the default.
+- Nor does it infer negatives. llama-server has `--log-prefix` and `--no-log-prefix`,
+  but also oddities such as `-no-kvu` and an option like `--no-host` that is not the
+  negative of `--host`. A profile that lists `"--no-log-prefix"` leaves a default
+  `"--log-prefix"` in place, and both reach llama-server.
+
+To drop a default without replacing it, or to switch one off with its negative, name the
+default in `remove`, spelled exactly as the default spells it, with no value:
+
+```toml
+[models.quiet]
+file = "quiet.gguf"
+remove = ["--log-prefix"]                 # leave it out entirely
+# or, to switch it off explicitly:
+# args = ["--no-log-prefix"]
+# remove = ["--log-prefix"]
+```
+
+A `remove` entry that matches no default is an error, which catches a typo or an alias
+that would otherwise do nothing.
 
 To add a profile, add a `[models.<name>]` table with `file`, add any flags it needs under
-`[models.<name>.args]`, and run it once with `--llama-model <name>`.
+`args`, and run it once with `--llama-model <name>`.
 
 ## Chat templates
 
@@ -233,7 +282,7 @@ from then on a problem is an error that names its cause:
 | No `binary` set and no `llama-server` on `PATH` | Error |
 | A relative path where an absolute one is required | Error |
 | Unknown profile name, unknown key, bad type, bad `chat_template` | Error naming the key or profile |
-| `model`, `host` or `port` set in a profile's `args` | Error |
+| `-m`, `--model`, `--host` or `--port` in `args` | Error |
 | Port 8001 in use | Error |
 | The server does not start | Error, pointing at the log |
 
