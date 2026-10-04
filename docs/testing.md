@@ -109,6 +109,7 @@ args = [                           # one llama-server flag per element, for ever
 file = "My-Model-Q4_K_M.gguf"      # a filename inside models_dir
 vram_mb = 6200                     # optional: measured memory use with these args
 startup_timeout = 180              # optional: seconds to wait for this model to load
+think_tags = ["<think>", "</think>"]   # optional: the thinking tags this model uses ([] if it does not think)
 chat_template = "my-model.jinja"   # optional: a file in tests/chat-templates/
 args = [                           # flags for this model, merged over the defaults
     "--ctx-size 8192",             # replaces the default above
@@ -125,6 +126,7 @@ remove = ["--log-prefix"]          # optional: drop a default (see below)
 | `chat_template` | profile | Template file in `tests/chat-templates/`; see [Chat templates](#chat-templates) |
 | `vram_mb` | profile | Positive integer. Accepted and checked, not used yet (see [Parallel servers](#parallel-servers-not-supported-yet)) |
 | `startup_timeout` | profile | Positive number of seconds. Beats the local file's value |
+| `think_tags` | profile | Optional. The thinking tags the model is expected to use, as observed on the real model: `[]` for a model that does not think, or `[start, end]`, two non-empty strings. Read by the [thinking-tag tests](#thinking-tag-tests) |
 
 Any other key is an error that names it, so a typo cannot quietly launch the wrong
 command. At least one profile is required.
@@ -194,6 +196,41 @@ that would otherwise do nothing.
 
 To add a profile, add a `[models.<name>]` table with `file`, add any flags it needs under
 `args`, and run it once with `--llama-model <name>` (or add it to a run with `all`).
+
+## Thinking-tag tests
+
+Models mark their reasoning with different delimiters (`<think>` for Qwen, `<|channel>thought`
+for Gemma 4, several `<|...|>` markers for gpt-oss, nothing for non-thinking models), and the
+app infers them from the server ([thinking tags](thinking-tags.md)). The offline tests check
+that inference against captured template excerpts. `tests/test_think_tags_integration.py`
+checks it against the real models, once per selected profile, comparing with the profile's
+`think_tags`:
+
+| Test | What it checks |
+|---|---|
+| `test_detected_tags_match_the_model` | After `refresh()`, `LlamaClient.think_tags` equals the recorded pair, with source `detected`. For `[]` it must be `None` |
+| `test_a_real_reply_uses_the_tags` | A real chat reply (prompt `What is 17 + 25? Answer with just the number.`, seed 1, temperature 0, at most 1500 tokens) contains the end tag and begins with the start tag, and `strip_think()` leaves exactly `42`. For `[]` the reply is exactly `42` and contains none of the tags any profile records |
+
+The second test is what keeps the first from agreeing with itself. A forced-open template
+such as Qwen's ends the prompt with `<think>`, so the model never writes it and the app
+re-emits it; for Gemma and gpt-oss the model writes the opener itself. Either way the reply
+the app shows begins with the start tag, which is what the test asserts.
+
+A profile with no `think_tags` fails both tests with a message saying so, so a new profile
+cannot silently skip this coverage. To record the tags for a new model:
+
+1. Start the model and read what the app detects (`/config`, the `think_tags` row), and what
+   it actually writes: send a prompt it has to reason about and look at the raw reply.
+   [How to check a new model](thinking-tags.md#how-to-check-a-new-model) lists the server calls.
+2. Record `[start, end]`, or `[]` if the reply has no reasoning block, in `think_tags` for the
+   profile. Take the values from the model's reply, not only from the app's detection, so the
+   test has something independent to compare with.
+3. Run `pytest -m integration --llama-model <profile>`.
+
+The reply is deterministic for a fixed seed on one machine (two runs gave byte-identical
+output here), but the tests assert structure, not exact text, so a different GPU or driver
+should not break them. They would break if a model needs far more than 1500 tokens to finish
+thinking on this prompt; the failure message says so.
 
 ## Chat templates
 
@@ -328,6 +365,7 @@ the budget is not an error.
 | `tests/llama_server_config.py` | Loading and checking the config files, picking the profile, building the command line, the port check |
 | `tests/llama_server_process.py` | Starting the process, waiting for it, stopping it |
 | `tests/test_llama_server_fixture.py` | Offline tests of all of the above, and the integration smoke test |
+| `tests/test_think_tags_integration.py` | Thinking-tag detection and a real reply, checked against each real model (see [Thinking-tag tests](#thinking-tag-tests)) |
 
 The offline tests never touch port 8001, your real `tests/llama-server.local.toml` or the
 real environment, so they give the same result on every machine.

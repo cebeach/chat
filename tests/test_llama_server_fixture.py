@@ -232,6 +232,13 @@ class TestLoadConfig:
             ('[models.a]\nfile = "a"\nchat_template = "../x.jinja"\n', "plain filename"),
             ('[models.a]\nfile = "a"\nchat_template = "missing.jinja"\n', "does not exist"),
             ("[models.a\n", "not valid TOML"),
+            # think_tags: [] or [start, end]
+            ('[models.a]\nfile = "a"\nthink_tags = "<think>"\n', "think_tags in profile 'a' must be"),
+            ('[models.a]\nfile = "a"\nthink_tags = ["<think>"]\n', "must be \\[\\] .* or \\[start, end\\]"),
+            ('[models.a]\nfile = "a"\nthink_tags = ["a", "b", "c"]\n', "two non-empty strings"),
+            ('[models.a]\nfile = "a"\nthink_tags = ["<think>", 5]\n', "two non-empty strings"),
+            ('[models.a]\nfile = "a"\nthink_tags = ["<think>", ""]\n', "two non-empty strings"),
+            ('[models.a]\nfile = "a"\nthink_tags = ["<think>", "  "]\n', "two non-empty strings"),
             # names that would make a selection ambiguous
             ('[models.all]\nfile = "a"\n', "cannot be used as a profile name"),
             ('[models."a,b"]\nfile = "a"\n', "cannot be used as a profile name"),
@@ -266,6 +273,25 @@ class TestLoadConfig:
     def test_errors_name_the_problem(self, files, text, match):
         with pytest.raises(LlamaTestConfigError, match=match):
             load(files, text)
+
+    def test_think_tags_has_three_states(self, files):
+        text = (
+            '[models.thinks]\nfile = "a"\nthink_tags = ["<think>", "</think>"]\n'
+            '[models.plain]\nfile = "b"\nthink_tags = []\n'
+            '[models.unrecorded]\nfile = "c"\n'
+        )
+        profiles = load(files, text).profiles
+        assert profiles["thinks"].think_tags == ("<think>", "</think>")
+        assert profiles["plain"].think_tags == ()  # recorded: the model does not think
+        assert profiles["unrecorded"].think_tags is None  # nothing recorded
+
+    def test_think_tags_do_not_change_the_command_line(self, files):
+        """think_tags is an expectation about the model, not a flag for llama-server."""
+        with_tags = '[models.a]\nfile = "a"\nthink_tags = ["<think>", "</think>"]\n'
+        without = '[models.a]\nfile = "a"\n'
+        argv_with = cfg.build_argv(load(files, with_tags).profiles["a"], files["models"], port=1)
+        argv_without = cfg.build_argv(load(files, without).profiles["a"], files["models"], port=1)
+        assert argv_with == argv_without
 
     def test_missing_file(self, files):
         with pytest.raises(LlamaTestConfigError, match="not found"):
@@ -588,6 +614,21 @@ class TestStart:
             assert server.proc.poll() is None
         finally:
             proc_mod.stop(server)
+
+
+class TestKnownThinkTags:
+    def test_collects_every_recorded_tag_and_ignores_the_rest(self, files):
+        text = (
+            '[models.thinks]\nfile = "a"\nthink_tags = ["<think>", "</think>"]\n'
+            '[models.other]\nfile = "b"\nthink_tags = ["[THINK]", "[/THINK]"]\n'
+            '[models.plain]\nfile = "c"\nthink_tags = []\n'
+            '[models.unrecorded]\nfile = "d"\n'
+        )
+        known = cfg.known_think_tags(load(files, text))
+        assert known == {"<think>", "</think>", "[THINK]", "[/THINK]"}
+
+    def test_nothing_recorded_is_an_empty_set(self, files):
+        assert cfg.known_think_tags(load(files)) == frozenset()
 
 
 class TestSelectProfileNames:

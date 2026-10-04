@@ -194,3 +194,7 @@ be detected, set it by hand:
 think_start = "<|channel|>analysis<|message|>"
 think_end = "<|end|><|start|>assistant<|channel|>final<|message|>"
 ```
+
+For the developer test suite, record what the model really emits as `think_tags` in its profile in
+`tests/llama-server.toml`. The integration tests then check the detection and a real reply against
+it; see [Testing with a real llama-server](testing.md#thinking-tag-tests).

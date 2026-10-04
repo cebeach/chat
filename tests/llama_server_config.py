@@ -51,6 +51,9 @@ class Profile:
     chat_template_path: Path | None = None
     vram_mb: int | None = None
     startup_timeout: float | None = None
+    # The thinking tags this model is expected to use, as observed on the real model:
+    # None = not recorded, () = the model does not think, (start, end) = a thinking model.
+    think_tags: tuple | None = None
 
 
 @dataclass
@@ -171,6 +174,18 @@ def _merge(default_args, own_args, removed):
     return kept + own_args
 
 
+def _parse_think_tags(value, where):
+    """[] (the model does not think) or [start, end]; the tags themselves are not judged."""
+    ok = isinstance(value, list) and len(value) in (0, 2)
+    ok = ok and all(isinstance(tag, str) and tag.strip() for tag in value)
+    if not ok:
+        raise LlamaTestConfigError(
+            f"think_tags in {where} must be [] (the model does not think) or [start, end], "
+            f"two non-empty strings; got {value!r}"
+        )
+    return tuple(value)
+
+
 def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
     """Parse and validate the committed profiles file.
 
@@ -207,7 +222,19 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
             )
         if not isinstance(table, dict):
             raise LlamaTestConfigError(f"{where} must be a table")
-        _check_keys(table, {"file", "args", "remove", "chat_template", "vram_mb", "startup_timeout"}, where)
+        _check_keys(
+            table,
+            {
+                "file",
+                "args",
+                "remove",
+                "chat_template",
+                "vram_mb",
+                "startup_timeout",
+                "think_tags",
+            },
+            where,
+        )
         file = table.get("file")
         if not isinstance(file, str) or not file:
             raise LlamaTestConfigError(f"{where} needs a `file` (the GGUF filename)")
@@ -221,6 +248,8 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
             profile.startup_timeout = _positive_number(
                 table["startup_timeout"], f"startup_timeout in {where}"
             )
+        if "think_tags" in table:
+            profile.think_tags = _parse_think_tags(table["think_tags"], where)
         if "chat_template" in table:
             template = table["chat_template"]
             if not isinstance(template, str) or not template or template != Path(template).name:
@@ -234,6 +263,11 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
             profile.chat_template_path = template_path
         profiles[name] = profile
     return Config(profiles=profiles)
+
+
+def known_think_tags(config):
+    """Every thinking tag any profile records: what a non-thinking reply must not contain."""
+    return frozenset(tag for profile in config.profiles.values() for tag in profile.think_tags or ())
 
 
 def select_profile(config, name=None):
