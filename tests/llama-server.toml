@@ -12,7 +12,7 @@
 [defaults]
 args = [
     "--jinja",
-    "--ctx-size 4096",
+    "--ctx-size 16384",
     "--n-gpu-layers 99",
     "--no-webui",
     "--flash-attn on",
@@ -21,6 +21,7 @@ args = [
     "--batch-size 4096",
     "--ubatch-size 1024",
     "--kv-unified",
+    "--parallel 1",
     "--log-prefix",
     "--log-verbose",
     "--log-timestamps",
@@ -29,6 +30,7 @@ args = [
 [models.qwen35-2b-q8_0]
 file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
 chat_template = "qwen3.5.jinja"    # tests/chat-templates/qwen3.5.jinja
+vram_mb = 2153                     # memory this profile uses with its exact args, measured on your GPU
 # args = [                         # flags for this model only, merged over the defaults
 #     "--ctx-size 8192",
 # ]

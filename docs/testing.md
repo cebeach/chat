@@ -257,8 +257,10 @@ server (`llama-server logs: ...`):
 | `env-removed.txt` | Names (never values) of the environment variables that were removed |
 
 The directory is under pytest's temporary directory, typically
-`/tmp/pytest-of-<user>/pytest-N/llama-server-<profile>0/`. It is not deleted by the
-fixture, and pytest keeps the last three runs.
+`/tmp/pytest-of-<user>/pytest-N/llama-server-<profile>0/`. Use `pytest-current` in place
+of `pytest-N` for the latest run, for example
+`/tmp/pytest-of-<user>/pytest-current/llama-server-<profile>0/llama-server.log`. The
+directory is not deleted by the fixture, and pytest keeps the last three runs.
 
 | What you see | Likely cause | Look at |
 |---|---|---|
