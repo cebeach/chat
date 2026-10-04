@@ -1,4 +1,4 @@
-"""A newline is drawn after the tag that closes a thinking block (display only).
+"""A "***" line, with a blank line on each side, is drawn after the tag that closes a thinking block (display only).
 
 Models differ: Qwen and DeepSeek already write "\\n\\n" after </think>, while Gemma
 and gpt-oss run straight from the closing tag into the answer. The stored reply
@@ -19,6 +19,7 @@ from config import DEFAULTS
 from conversation import Conversation
 from ui import ThinkSeparator, display_assistant_stream, separate_thinking
 
+D = ui.THINK_DELIMITER  # "\n***\n"
 GEMMA_END = "<channel|>"
 GPTOSS_END = "<|end|><|start|>assistant<|channel|>final<|message|>"
 
@@ -37,29 +38,48 @@ class TestThinkSeparator:
         # What Gemma's stream really looks like: the tag is one piece.
         assert (
             feed_all(GEMMA_END, ["The answer is 144.", "<channel|>", "1", "4", "4"])
-            == "The answer is 144.<channel|>\n144"
+            == f"The answer is 144.<channel|>{D}144"
         )
 
     def test_answer_in_the_same_piece_as_the_tag(self):
-        assert feed_all(GEMMA_END, ["why<channel|>144"]) == "why<channel|>\n144"
+        assert feed_all(GEMMA_END, ["why<channel|>144"]) == f"why<channel|>{D}144"
 
     def test_tag_split_across_pieces(self):
-        assert feed_all("</think>", ["why", "</", "think", ">", "answer"]) == "why</think>\nanswer"
-        assert feed_all("</think>", ["why</th", "ink>ans", "wer"]) == "why</think>\nanswer"
+        assert feed_all("</think>", ["why", "</", "think", ">", "answer"]) == f"why</think>{D}answer"
+        assert feed_all("</think>", ["why</th", "ink>ans", "wer"]) == f"why</think>{D}answer"
 
-    def test_no_newline_added_when_one_already_follows(self, subtests):
-        for follow in ("\n\nanswer", "\nanswer", "\r\nanswer"):
+    def test_every_newline_after_the_tag_is_absorbed_into_the_delimiter(self, subtests):
+        cases = {
+            "\nanswer": f"{D}answer",
+            "\n\nanswer": f"{D}answer",
+            "\n\n\nanswer": f"{D}answer",
+            "\r\nanswer": f"{D}\r\nanswer",  # a "\r" is ordinary text
+        }
+        for follow, drawn in cases.items():
             with subtests.test(follow=follow):
-                assert feed_all("</think>", ["why", "</think>", follow]) == "why</think>" + follow
-                assert feed_all("</think>", ["why</think>" + follow]) == "why</think>" + follow
+                assert feed_all("</think>", ["why", "</think>", follow]) == "why</think>" + drawn
+                assert feed_all("</think>", ["why</think>" + follow]) == "why</think>" + drawn
 
-    def test_nothing_is_added_when_the_reply_ends_at_the_tag(self):
-        assert feed_all(GEMMA_END, ["only thinking", "<channel|>"]) == "only thinking<channel|>"
-        assert feed_all(GEMMA_END, ["only thinking<channel|>"]) == "only thinking<channel|>"
+    def test_the_newline_may_arrive_as_its_own_piece_or_after_a_split_tag(self):
+        want = f"why</think>{D}answer"
+        assert feed_all("</think>", ["why</think>", "\n", "answer"]) == want
+        assert feed_all("</think>", ["why</think>", "\nanswer"]) == want
+        assert feed_all("</think>", ["why</th", "ink>\n", "answer"]) == want
+        assert feed_all("</think>", ["why</think>", "", "\nanswer"]) == want
+        assert feed_all("</think>", ["why</think>", "\n", "\n", "answer"]) == want
+        assert feed_all("</think>", ["why</think>\n", "\n", "answer"]) == want
+
+    def test_two_tags_in_a_row_each_get_one_delimiter(self):
+        assert feed_all("</think>", ["a</think>", "\n", "\nb"]) == f"a</think>{D}b"
+        assert feed_all("</think>", ["a</think></think>b"]) == f"a</think>{D}</think>{D}b"
+
+    def test_the_delimiter_is_drawn_when_the_reply_ends_at_the_tag(self):
+        assert feed_all(GEMMA_END, ["only thinking", "<channel|>"]) == f"only thinking<channel|>{D}"
+        assert feed_all(GEMMA_END, ["only thinking<channel|>"]) == f"only thinking<channel|>{D}"
 
     def test_a_multi_marker_end_split_at_every_position(self, subtests):
         text = f"reason{GPTOSS_END}Hi"
-        expected = f"reason{GPTOSS_END}\nHi"
+        expected = f"reason{GPTOSS_END}{D}Hi"
         for cut in range(1, len(text)):
             with subtests.test(cut=cut):
                 assert feed_all(GPTOSS_END, [text[:cut], text[cut:]]) == expected
@@ -69,7 +89,7 @@ class TestThinkSeparator:
 
     def test_every_chunk_size_gives_the_same_result(self, subtests):
         text = "a</think>b</think>\nc</think>d</think>"
-        expected = "a</think>\nb</think>\nc</think>\nd</think>"
+        expected = f"a</think>{D}b</think>{D}c</think>{D}d</think>{D}"
         for size in range(1, len(text) + 1):
             with subtests.test(size=size):
                 assert feed_all("</think>", chunks(text, size)) == expected
@@ -77,7 +97,7 @@ class TestThinkSeparator:
     def test_each_thinking_block_is_handled(self):
         assert (
             feed_all(GEMMA_END, ["t1<channel|>", "a1", "t2<channel|>", "a2"])
-            == "t1<channel|>\na1t2<channel|>\na2"
+            == f"t1<channel|>{D}a1t2<channel|>{D}a2"
         )
 
     def test_text_that_only_looks_like_the_tag_is_left_alone(self, subtests):
@@ -89,7 +109,7 @@ class TestThinkSeparator:
         assert feed_all("", ["a", "b", "\n"]) == "ab\n"
 
     def test_a_single_character_end(self):
-        assert feed_all("|", ["a|", "b|\n", "c"]) == "a|\nb|\nc"
+        assert feed_all("|", ["a|", "b|\n", "c"]) == f"a|{D}b|{D}c"
 
 
 def draw(tokens, think_end=None):
@@ -103,33 +123,45 @@ def draw(tokens, think_end=None):
 class TestDisplayAssistantStream:
     TOKENS = ["<|channel>thought\n", "The answer is 144.", "<channel|>", "1", "4", "4"]
 
-    def test_the_screen_gets_the_newline_but_the_stored_reply_does_not(self):
+    def test_the_screen_gets_the_delimiter_but_the_stored_reply_does_not(self):
         drawn, text = draw(self.TOKENS, think_end=GEMMA_END)
-        assert "The answer is 144.<channel|>\n144" in drawn
+        assert f"The answer is 144.<channel|>{D}144" in drawn
         assert text == "".join(self.TOKENS)  # byte for byte what the model produced
-        assert "<channel|>\n" not in text
+        assert "***" not in text
 
     def test_without_a_known_tag_nothing_changes(self):
         drawn, text = draw(self.TOKENS, think_end=None)
         assert "The answer is 144.<channel|>144" in drawn
         assert text == "".join(self.TOKENS)
 
-    def test_a_model_that_already_writes_a_newline_looks_as_before(self):
+    def test_a_model_that_already_writes_blank_lines_gets_one_on_each_side(self):
         tokens = ["<think>\n", "why", "</think>", "\n\n", "answer"]
-        with_end, text = draw(tokens, think_end="</think>")
-        without, _ = draw(tokens, think_end=None)
-        assert with_end.split("\n", 1)[1] == without.split("\n", 1)[1]  # after the header line
+        drawn, text = draw(tokens, think_end="</think>")
+        assert f"why</think>{D}answer" in drawn  # the model's own newlines are absorbed
         assert text == "".join(tokens)
 
     def test_the_tag_arriving_in_pieces_is_still_separated(self):
         drawn, text = draw(["why", "</", "think", ">", "answer"], think_end="</think>")
-        assert "why</think>\nanswer" in drawn
+        assert f"why</think>{D}answer" in drawn
         assert text == "why</think>answer"
 
-    def test_an_interrupted_stream_keeps_the_stored_text_unchanged(self):
-        # A tag that ended exactly at the interruption leaves a pending newline; it
-        # is never drawn and never leaks into the stored reply. (As before this
-        # feature, the last partial word of an interrupted reply is not drawn.)
+    def test_the_delimiter_is_drawn_before_the_next_piece_arrives(self):
+        out = io.StringIO()
+        seen = []
+
+        def gen():
+            yield "why</think>"
+            seen.append(out.getvalue())
+            yield "answer"
+
+        with contextlib.redirect_stdout(out):
+            display_assistant_stream(gen(), think_end="</think>")
+        assert seen[0].endswith(f"why</think>{D}")
+
+    def test_an_interrupt_right_after_the_tag_keeps_the_delimiter_and_the_stored_text(self):
+        # The delimiter ends in a newline, so the display loop draws it at once and
+        # it survives the interrupt (which drops the last partial word). It is never
+        # added to the stored reply, which only gains the " [interrupted]" marker.
         def gen():
             yield "thinking<channel|>"
             raise KeyboardInterrupt
@@ -138,34 +170,37 @@ class TestDisplayAssistantStream:
         with contextlib.redirect_stdout(out):
             text = display_assistant_stream(gen(), think_end=GEMMA_END)
         assert text == "thinking<channel|> [interrupted]"
-        assert "<channel|>\n" not in text
+        assert f"thinking<channel|>{D}" in out.getvalue()
         assert out.getvalue().endswith("\n")
 
     def test_a_long_reply_still_wraps(self):
         words = " ".join(["word"] * 60)
         drawn, text = draw([words, "<channel|>", "x"], think_end=GEMMA_END)
         assert text == words + "<channel|>x"
-        assert "<channel|>\nx" in drawn
+        assert f"<channel|>{D}x" in drawn
 
 
 class TestSeparateThinking:
-    def test_adds_a_newline_after_the_tag_unless_one_follows_or_the_text_ends(self):
-        assert separate_thinking("why<channel|>144", [GEMMA_END]) == "why<channel|>\n144"
-        assert separate_thinking("why</think>\n\nanswer", ["</think>"]) == "why</think>\n\nanswer"
-        assert separate_thinking("why</think>\r\nanswer", ["</think>"]) == "why</think>\r\nanswer"
-        assert separate_thinking("why<channel|>", [GEMMA_END]) == "why<channel|>"
+    def test_adds_the_delimiter_after_the_tag_and_absorbs_following_newlines(self):
+        assert separate_thinking("why<channel|>144", [GEMMA_END]) == f"why<channel|>{D}144"
+        assert separate_thinking("why</think>\nanswer", ["</think>"]) == f"why</think>{D}answer"
+        assert separate_thinking("why</think>\n\nanswer", ["</think>"]) == f"why</think>{D}answer"
+        assert separate_thinking("why</think>\r\nanswer", ["</think>"]) == f"why</think>{D}\r\nanswer"
+        assert separate_thinking("why<channel|>", [GEMMA_END]) == f"why<channel|>{D}"
 
     def test_every_occurrence_and_every_known_end(self):
         text = "a<channel|>b</think>c<channel|>d"
-        assert separate_thinking(text, [GEMMA_END, "</think>"]) == "a<channel|>\nb</think>\nc<channel|>\nd"
+        assert (
+            separate_thinking(text, [GEMMA_END, "</think>"]) == f"a<channel|>{D}b</think>{D}c<channel|>{D}d"
+        )
 
     def test_empty_ends_and_no_ends_change_nothing(self):
         assert separate_thinking("a<channel|>b", []) == "a<channel|>b"
         assert separate_thinking("a<channel|>b", [""]) == "a<channel|>b"
 
     def test_tags_with_regex_characters_are_matched_literally(self):
-        assert separate_thinking("a[/THINK]b", ["[/THINK]"]) == "a[/THINK]\nb"
-        assert separate_thinking("a<|end|>b", ["<|end|>"]) == "a<|end|>\nb"
+        assert separate_thinking("a[/THINK]b", ["[/THINK]"]) == f"a[/THINK]{D}b"
+        assert separate_thinking("a<|end|>b", ["<|end|>"]) == f"a<|end|>{D}b"
 
     def test_streaming_and_static_agree_for_every_chunking(self, subtests):
         samples = [
@@ -175,6 +210,8 @@ class TestSeparateThinking:
             ("[THINK]t[/THINK]answer", "[/THINK]"),
             ("no tag here at all", GEMMA_END),
             ("ends at the tag<channel|>", GEMMA_END),
+            ("a</think>\n\nb</think></think>c", "</think>"),
+            ("a|\nb|", "|"),
         ]
         for text, end in samples:
             expected = separate_thinking(text, [end])
@@ -201,10 +238,10 @@ class TestCatSeparation:
             handle_command("/cat", "saved", None, Conversation(), self.state)
         return re.sub(r"\x1b\[[0-9;]*m", "", cap.get())
 
-    def test_assistant_replies_get_the_newline_and_user_messages_do_not(self):
+    def test_assistant_replies_get_the_delimiter_and_user_messages_do_not(self):
         saved_conversation(self.tmp, [("<|channel>thought", "<channel|>")])
         out = self.cat()
-        assert "why<channel|>\nThe answer." in out
+        assert "why<channel|>\n\n***\n\nThe answer." in out
         assert "question mentioning <channel|> literally" in out  # user text untouched
 
     def test_a_file_without_recorded_pairs_prints_as_before(self):
@@ -226,9 +263,9 @@ class TestCatSeparation:
         conv.save(self.tmp, name="saved", model="/m/x.gguf", think_pairs=[("[THINK]", "[/THINK]")])
         out = self.cat()
         assert "see [/path] please" in out
-        assert "[THINK]hmm[/THINK]\nanswer [/etc/hosts]" in out  # bracket-style pair separated too
+        assert "[THINK]hmm[/THINK]\n\n***\n\nanswer [/etc/hosts]" in out  # bracket-style pair separated too
 
-    def test_the_stored_file_never_contains_the_added_newline(self):
+    def test_the_stored_file_never_contains_the_delimiter(self):
         saved_conversation(self.tmp, [("<|channel>thought", "<channel|>")])
         self.cat()
         stored = json.loads((Path(self.tmp) / "saved.json").read_text())["messages"][1]["content"]

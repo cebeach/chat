@@ -123,12 +123,25 @@ this session never ran keep their reasoning when saved again; set the override t
 
 Some models (Gemma, gpt-oss) run straight from the closing tag into the answer
 (`…The answer is 144.<channel|>144`); others (Qwen, DeepSeek) already write a blank line after
-it. So the REPL draws one newline after the active model's closing tag, unless a newline already
-follows it or the reply ends there. `/cat` and `conv2txt` do the same for assistant replies, using
-the pairs recorded in the saved file (a file saved without `think_pairs` is shown as it is).
+it. Either way the end of the reasoning is easy to miss, so the REPL draws a `***` line directly
+after the active model's closing tag, as soon as the tag arrives, with a blank line on each side:
+
+```text
+…The answer is 144.</think>
+
+***
+
+The answer is 144.
+```
+
+Any newlines the model itself writes directly after the tag are absorbed into the delimiter, so
+every model gets exactly one blank line on each side. The delimiter is also drawn when the reply
+ends at the tag. `/cat` and `conv2txt` do the same for assistant replies, using the pairs recorded
+in the saved file (a file saved without `think_pairs` is shown as it is). A `***` the model writes
+itself looks the same as the delimiter.
 
 This is display only. The stored reply, the saved JSON, the history sent back to the model and
-strip-on-save never contain the added newline. `/cat` also escapes the text it prints, so a saved
+strip-on-save never contain the added delimiter. `/cat` also escapes the text it prints, so a saved
 reply containing something like `[/THINK]` or `[/path]` is shown literally instead of failing.
 
 ## Known limits
