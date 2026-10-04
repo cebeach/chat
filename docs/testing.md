@@ -110,6 +110,7 @@ file = "My-Model-Q4_K_M.gguf"      # a filename inside models_dir
 vram_mb = 6200                     # optional: measured memory use with these args
 startup_timeout = 180              # optional: seconds to wait for this model to load
 think_tags = ["<think>", "</think>"]   # optional: the thinking tags this model uses ([] if it does not think)
+source_url = "https://example.com/models/My-Model-Q4_K_M.gguf"   # optional: where the file came from
 chat_template = "my-model.jinja"   # optional: a file in tests/chat-templates/
 args = [                           # flags for this model, merged over the defaults
     "--ctx-size 8192",             # replaces the default above
@@ -126,6 +127,7 @@ remove = ["--log-prefix"]          # optional: drop a default (see below)
 | `chat_template` | profile | Template file in `tests/chat-templates/`; see [Chat templates](#chat-templates) |
 | `vram_mb` | profile | Positive integer. Accepted and checked, not used yet (see [Parallel servers](#parallel-servers-not-supported-yet)) |
 | `startup_timeout` | profile | Positive number of seconds. Beats the local file's value |
+| `source_url` | profile | Optional. An `http(s)` link to the GGUF file the profile uses: a reference for where it came from, and a download target for a possible future step. **Nothing downloads it today**: the tests use the file already in your models directory, and this is an air-gapped project. Only its shape is checked, and a URL with credentials in it is refused, because the file is committed |
 | `think_tags` | profile | Optional. The thinking tags the model is expected to use, as observed on the real model: `[]` for a model that does not think, or `[start, end]`, two non-empty strings. Read by the [thinking-tag tests](#thinking-tag-tests) |
 
 Any other key is an error that names it, so a typo cannot quietly launch the wrong
@@ -194,7 +196,7 @@ remove = ["--log-prefix"]                 # leave it out entirely
 A `remove` entry that matches no default is an error, which catches a typo or an alias
 that would otherwise do nothing.
 
-To add a profile, add a `[models.<name>]` table with `file`, add any flags it needs under
+To add a profile, add a `[models.<name>]` table with `file` (and, as a record, `source_url`), add any flags it needs under
 `args`, and run it once with `--llama-model <name>` (or add it to a run with `all`).
 
 ## Thinking-tag tests

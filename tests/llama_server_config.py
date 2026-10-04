@@ -11,6 +11,7 @@ import shlex
 import shutil
 import socket
 import tomllib
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,6 +55,9 @@ class Profile:
     # The thinking tags this model is expected to use, as observed on the real model:
     # None = not recorded, () = the model does not think, (start, end) = a thinking model.
     think_tags: tuple | None = None
+    # Where the GGUF came from, as an http(s) link to the file. A reference only: nothing
+    # downloads it, and the tests use the file already in the models directory.
+    source_url: str | None = None
 
 
 @dataclass
@@ -186,6 +190,24 @@ def _parse_think_tags(value, where):
     return tuple(value)
 
 
+def _parse_source_url(value, where):
+    """An http(s) link to the GGUF file. Nothing is fetched; the value is only checked.
+
+    Credentials in the URL are refused (the file is committed) and never echoed back.
+    """
+    problem = f"source_url in {where} must be an http(s) URL of the GGUF file, got {value!r}"
+    if not isinstance(value, str) or not value or any(ch.isspace() for ch in value):
+        raise LlamaTestConfigError(problem)
+    parts = urlparse(value)
+    if parts.scheme not in ("http", "https") or not parts.netloc or not parts.hostname:
+        raise LlamaTestConfigError(problem)
+    if parts.username is not None or parts.password is not None:
+        raise LlamaTestConfigError(
+            f"source_url in {where} must not contain credentials: the profiles file is committed"
+        )
+    return value
+
+
 def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
     """Parse and validate the committed profiles file.
 
@@ -232,6 +254,7 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
                 "vram_mb",
                 "startup_timeout",
                 "think_tags",
+                "source_url",
             },
             where,
         )
@@ -250,6 +273,8 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
             )
         if "think_tags" in table:
             profile.think_tags = _parse_think_tags(table["think_tags"], where)
+        if "source_url" in table:
+            profile.source_url = _parse_source_url(table["source_url"], where)
         if "chat_template" in table:
             template = table["chat_template"]
             if not isinstance(template, str) or not template or template != Path(template).name:

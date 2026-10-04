@@ -239,6 +239,18 @@ class TestLoadConfig:
             ('[models.a]\nfile = "a"\nthink_tags = ["<think>", 5]\n', "two non-empty strings"),
             ('[models.a]\nfile = "a"\nthink_tags = ["<think>", ""]\n', "two non-empty strings"),
             ('[models.a]\nfile = "a"\nthink_tags = ["<think>", "  "]\n', "two non-empty strings"),
+            # source_url: an http(s) link to the file, no credentials
+            ('[models.a]\nfile = "a"\nsource_url = 5\n', "must be an http\\(s\\) URL"),
+            ('[models.a]\nfile = "a"\nsource_url = ""\n', "must be an http\\(s\\) URL"),
+            ('[models.a]\nfile = "a"\nsource_url = "huggingface.co/x/a.gguf"\n', "must be an http"),
+            ('[models.a]\nfile = "a"\nsource_url = "ftp://example.com/a.gguf"\n', "must be an http"),
+            ('[models.a]\nfile = "a"\nsource_url = "file:///home/x/a.gguf"\n', "must be an http"),
+            ('[models.a]\nfile = "a"\nsource_url = "https://"\n', "must be an http"),
+            ('[models.a]\nfile = "a"\nsource_url = "https://example.com/a b.gguf"\n', "must be an http"),
+            (
+                '[models.a]\nfile = "a"\nsource_url = "https://user:pw@example.com/a.gguf"\n',
+                "must not contain credentials",
+            ),
             # names that would make a selection ambiguous
             ('[models.all]\nfile = "a"\n', "cannot be used as a profile name"),
             ('[models."a,b"]\nfile = "a"\n', "cannot be used as a profile name"),
@@ -292,6 +304,33 @@ class TestLoadConfig:
         argv_with = cfg.build_argv(load(files, with_tags).profiles["a"], files["models"], port=1)
         argv_without = cfg.build_argv(load(files, without).profiles["a"], files["models"], port=1)
         assert argv_with == argv_without
+
+    def test_source_url_is_optional_and_kept_as_written(self, files, subtests):
+        urls = [
+            "https://huggingface.co/org/repo/resolve/main/a.gguf",
+            "https://huggingface.co/org/repo/resolve/main/a.gguf?download=true",
+            "http://mirror.local:8080/models/a.gguf",
+        ]
+        for url in urls:
+            with subtests.test(url=url):
+                text = f'[models.a]\nfile = "a"\nsource_url = "{url}"\n'
+                assert load(files, text).profiles["a"].source_url == url
+        assert load(files, '[models.a]\nfile = "a"\n').profiles["a"].source_url is None
+
+    def test_a_url_with_credentials_is_refused_without_echoing_them(self, files):
+        text = '[models.a]\nfile = "a"\nsource_url = "https://alice:s3cret@example.com/a.gguf"\n'
+        with pytest.raises(LlamaTestConfigError) as exc:
+            load(files, text)
+        assert "s3cret" not in str(exc.value) and "alice" not in str(exc.value)
+
+    def test_source_url_changes_neither_the_command_line_nor_the_tests(self, files):
+        """A reference only: no download, and the GGUF still comes from the models directory."""
+        with_url = '[models.a]\nfile = "a"\nsource_url = "https://example.com/a.gguf"\n'
+        without = '[models.a]\nfile = "a"\n'
+        argv_with = cfg.build_argv(load(files, with_url).profiles["a"], files["models"], port=1)
+        argv_without = cfg.build_argv(load(files, without).profiles["a"], files["models"], port=1)
+        assert argv_with == argv_without
+        assert "example.com" not in " ".join(argv_with)
 
     def test_missing_file(self, files):
         with pytest.raises(LlamaTestConfigError, match="not found"):

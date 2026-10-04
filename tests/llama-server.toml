@@ -32,6 +32,7 @@ file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
 chat_template = "qwen3.5.jinja"    # tests/chat-templates/qwen3.5.jinja
 vram_mb = 2153                     # memory this profile uses with its exact args, measured on your GPU
 think_tags = ["<think>", "</think>"]   # observed on the real model; checked by the integration tests
+source_url = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q8_0.gguf"
 # args = [                         # flags for this model only, merged over the defaults
 #     "--ctx-size 8192",
 # ]
@@ -40,13 +41,16 @@ think_tags = ["<think>", "</think>"]   # observed on the real model; checked by 
 file = "gemma-4-E2B-it-Q8_0.gguf"
 vram_mb = 2666
 think_tags = ["<|channel>thought", "<channel|>"]
+source_url = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf"
 
 [models.openai_gpt-oss-20b-MXFP4]
 file = "openai_gpt-oss-20b-MXFP4.gguf"
 vram_mb = 9667
 think_tags = ["<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"]
+source_url = "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf"
 
 [models.Ministral-3-3B-Instruct-2512-Q8_0]
 file = "Ministral-3-3B-Instruct-2512-Q8_0.gguf"
 vram_mb = 4539
 think_tags = []                    # this model does not think
+source_url = "https://huggingface.co/ggml-org/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q8_0.gguf"
