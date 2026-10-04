@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## File access
+
+Claude has permission to access only the current working directory (this repository). Every other path requires explicit permission from the user.
+
+The one exception is the llama.cpp source. It is readable at `llama.cpp/`, a symlink the user maintains to their local checkout, which matches the `llama-server` binary they run. Use it for llama-server flags, endpoints and defaults instead of relying on memory. That directory alone is granted by the `Read(llama.cpp/**)` rule in `.claude/settings.local.json`. Treat it as read-only. If the link is missing, or a read through it is refused, ask the user; do not look for the source anywhere else. The link is not committed (see `.gitignore`).
+
 ## Running
 
 ```bash
@@ -10,7 +16,7 @@ python chat.py              # start chat with whatever model llama-server is ser
 python chat.py --url http://host:8001  # custom llama-server URL
 ```
 
-Requires a running llama-server (`llama-server --port 8001 -m <model>`).
+`chat.py` requires a running llama-server (`llama-server --port 8001 -m <model>`). The test suite does not: the offline tests fake the server, and the `integration` tests start their own (see Testing).
 
 ## Linting
 
@@ -29,6 +35,8 @@ venv/bin/python -m pytest tests/test_load.py::TestLoadMergesRecordedThinkPairs  
 
 Tests are pytest style (plain `assert`, `tmp_path`, `subtests`); mocking stays on `unittest.mock`. Fixtures and fakes shared between files live in `tests/helpers.py`.
 
+Tests marked `integration` start a real llama-server (profiles in `tests/llama-server.toml`) and are skipped unless a models directory is configured. They are serial and always use port 8001, so a plain `pytest` fails on a configured machine while your own llama-server is running there; use `-m "not integration"` then. A plain run exercises the first profile only; `--llama-model all` (or a comma-separated list) runs every profile, one server after another. See `docs/testing.md`.
+
 ## Architecture
 
 Air-gapped terminal chat app talking to a local llama.cpp server. Six source files, no package structure:
@@ -42,7 +50,7 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Six source fil
 
 ### Documentation
 
-`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too.
+`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too. `docs/testing.md` is for developers (the real-server test fixtures), is not part of the user guide, and must be updated when the profile format, the local settings or the fixture behavior changes.
 
 ### Data flow
 

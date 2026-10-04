@@ -16,7 +16,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 - `requests` — HTTP client for the llama.cpp server
 - `rich` — Terminal formatting and streaming output
 - `ruff` — linting and formatting (development only; listed in `requirements.txt`)
-- `pytest` — test runner (development only; `pip install -r requirements-dev.txt`, then `python -m pytest`)
+- `pytest` — test runner (development only; `pip install -r requirements-dev.txt`, then `python -m pytest`). Integration tests that start a real llama-server are described in [docs/testing.md](docs/testing.md)
 
 ## Features
 

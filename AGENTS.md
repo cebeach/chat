@@ -10,7 +10,7 @@ python chat.py              # start chat with whatever model llama-server is ser
 python chat.py --url http://host:8001  # custom llama-server URL
 ```
 
-Requires a running llama-server (`llama-server --port 8001 -m <model>`).
+`chat.py` requires a running llama-server (`llama-server --port 8001 -m <model>`). The test suite does not: the offline tests fake the server, and the `integration` tests start their own (see Testing).
 
 ## Linting
 
@@ -28,6 +28,8 @@ venv/bin/python -m pytest tests/test_load.py::TestLoadMergesRecordedThinkPairs  
 ```
 
 Tests are pytest style (plain `assert`, `tmp_path`, `subtests`); mocking stays on `unittest.mock`. Fixtures and fakes shared between files live in `tests/helpers.py`.
+
+Tests marked `integration` start a real llama-server (profiles in `tests/llama-server.toml`) and are skipped unless a models directory is configured. They are serial and always use port 8001, so a plain `pytest` fails on a configured machine while your own llama-server is running there; use `-m "not integration"` then. A plain run exercises the first profile only; `--llama-model all` (or a comma-separated list) runs every profile, one server after another. See `docs/testing.md`, which must be updated when the profile format, the local settings or the fixture behavior changes.
 
 ## Architecture
 

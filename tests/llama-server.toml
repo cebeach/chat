@@ -1,0 +1,56 @@
+# Profiles for the llama-server integration tests: one table per model, kept in git so the
+# arguments for each model are reviewed like code. See docs/testing.md.
+#
+# `file` is a GGUF filename inside your models directory (models_dir in
+# tests/llama-server.local.toml, or $LLAMA_TEST_MODEL_DIR). The fixture sets -m, --host and
+# --port itself.
+#
+# `args` is a list with one llama-server flag per element, written exactly as you would type
+# it to llama-server, with either dash flavor (-ngl 99 or --n-gpu-layers 99). A profile's
+# `args` replace any default spelled with the same flag; aliases are not matched.
+
+[defaults]
+args = [
+    "--jinja",
+    "--ctx-size 16384",
+    "--n-gpu-layers 99",
+    "--no-webui",
+    "--flash-attn on",
+    "--cache-type-k q8_0",
+    "--cache-type-v q8_0",
+    "--batch-size 4096",
+    "--ubatch-size 1024",
+    "--kv-unified",
+    "--parallel 1",
+    "--log-prefix",
+    "--log-verbose",
+    "--log-timestamps",
+]
+
+[models.qwen35-2B-Q8_0]
+file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
+chat_template = "qwen3.5.jinja"    # tests/chat-templates/qwen3.5.jinja
+vram_mb = 2153                     # memory this profile uses with its exact args, measured on your GPU
+think_tags = ["<think>", "</think>"]   # observed on the real model; checked by the integration tests
+source_url = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q8_0.gguf"
+# args = [                         # flags for this model only, merged over the defaults
+#     "--ctx-size 8192",
+# ]
+
+[models.gemma-4-E2B-it-Q8_0]
+file = "gemma-4-E2B-it-Q8_0.gguf"
+vram_mb = 2666
+think_tags = ["<|channel>thought", "<channel|>"]
+source_url = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf"
+
+[models.gpt-oss-20b-MXFP4]
+file = "gpt-oss-20b-MXFP4.gguf"
+vram_mb = 9667
+think_tags = ["<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"]
+source_url = "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf"
+
+[models.Ministral-3-3B-Instruct-2512-Q8_0]
+file = "Ministral-3-3B-Instruct-2512-Q8_0.gguf"
+vram_mb = 4539
+think_tags = []                    # this model does not think
+source_url = "https://huggingface.co/ggml-org/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q8_0.gguf"

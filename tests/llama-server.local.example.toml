@@ -1,0 +1,23 @@
+# Machine-specific settings for the llama-server integration tests.
+#
+# Copy this file to tests/llama-server.local.toml (which git ignores) and edit it.
+# Every key is optional except that the integration tests are skipped until a models
+# directory is set here or in $LLAMA_TEST_MODEL_DIR. See docs/testing.md.
+#
+# Paths may start with ~, and must be absolute after that.
+
+# Directory holding the GGUF files named by the profiles in tests/llama-server.toml.
+# $LLAMA_TEST_MODEL_DIR overrides this.
+# models_dir = "~/gguf"
+
+# The llama-server to run. Default: the first `llama-server` on PATH.
+# A bare name is looked up on PATH; anything with a slash must be an executable file.
+# binary = "~/build/llama.cpp/build/bin/llama-server"
+
+# Seconds to wait for the model to load before giving up. A profile's own
+# startup_timeout wins over this. Default: 120.
+# startup_timeout = 120
+
+# Accepted and checked, but not used yet: reserved for running several servers at once.
+# [budget]
+# vram_mb = 24000
