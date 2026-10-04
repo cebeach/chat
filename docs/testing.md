@@ -106,17 +106,17 @@ args = [                           # one llama-server flag per element, for ever
 ]
 
 [models.my-model]                  # the profile name, as used by --llama-model
-file = "My-Model-Q4_K_M.gguf"      # a filename inside models_dir
-vram_mb = 6200                     # optional: measured memory use with these args
-startup_timeout = 180              # optional: seconds to wait for this model to load
-think_tags = ["<think>", "</think>"]   # optional: the thinking tags this model uses ([] if it does not think)
-source_url = "https://example.com/models/My-Model-Q4_K_M.gguf"   # optional: where the file came from
-chat_template = "my-model.jinja"   # optional: a file in tests/chat-templates/
 args = [                           # flags for this model, merged over the defaults
     "--ctx-size 8192",             # replaces the default above
     "--reasoning-format none",
 ]
+chat_template = "my-model.jinja"   # optional: a file in tests/chat-templates/
+file = "My-Model-Q4_K_M.gguf"      # a filename inside models_dir
 remove = ["--log-prefix"]          # optional: drop a default (see below)
+source_url = "https://example.com/models/My-Model-Q4_K_M.gguf"   # optional: where the file came from
+startup_timeout = 180              # optional: seconds to wait for this model to load
+think_tags = ["<think>", "</think>"]   # optional: the thinking tags this model uses ([] if it does not think)
+vram_mb = 6200                     # optional: measured memory use with these args
 ```
 
 | Key | Where | Meaning |
@@ -237,12 +237,13 @@ thinking on this prompt; the failure message says so.
 ## Chat templates
 
 Some models need a modified chat template to work with llama.cpp. Keep that template in
-git too: put it in `tests/chat-templates/` and name it in the profile.
+git too: put it in `tests/chat-templates/` and name it in the profile. No shipped profile
+needs one at the moment, so that directory does not exist until one does; create it.
 
 ```toml
-[models.qwen3-5]
-file = "Qwen3.5-9B-Q4_K_M.gguf"
-chat_template = "qwen3.5.jinja"
+[models.my-model]
+file = "My-Model-Q4_K_M.gguf"
+chat_template = "my-model.jinja"
 ```
 
 The fixture adds `--chat-template-file <full path>` before `-m`. Rules:
