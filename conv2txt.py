@@ -122,12 +122,15 @@ def think_ends(data: dict) -> list[str]:
     return ends
 
 
+THINK_DELIMITER = "\n\n***\n\n"  # mirrors ui.THINK_DELIMITER
+
+
 def separate_thinking(text: str, ends: list[str]) -> str:
-    """One newline after each closing thinking tag, unless a newline already
-    follows it or the text ends there (display only)."""
+    """THINK_DELIMITER after each closing thinking tag; every newline that directly
+    follows the tag is absorbed into it (display only)."""
     for end in ends:
         if end:
-            text = re.sub(re.escape(end) + r"(?=[^\r\n])", lambda m: m.group(0) + "\n", text)
+            text = re.sub(re.escape(end) + r"\n*", lambda m: end + THINK_DELIMITER, text)
     return text
 
 

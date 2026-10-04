@@ -62,7 +62,10 @@ def print_help():
     table.add_column("Description")
     table.add_row("/cat <name>", "Print a saved conversation to the console")
     table.add_row("/clear", "Clear conversation history")
-    table.add_row("/config", "Show configuration; '/config save_thinking on|off' controls whether <think> blocks are saved (omit on/off to toggle)")
+    table.add_row(
+        "/config",
+        "Show configuration; '/config save_thinking on|off' controls whether <think> blocks are saved (omit on/off to toggle)",
+    )
     table.add_row("/conversations", "List saved conversations")
     table.add_row("/exit", "Quit the application")
     table.add_row("/help", "Show this help message")
@@ -75,7 +78,10 @@ def print_help():
     table.add_row("/set", "Show model options (seed, temperature, top_p)")
     table.add_row("/set <key> <val>", "Set a model option (or 'default' to reset)")
     table.add_row("/stats", "Toggle token and context stats display")
-    table.add_row("/system <prompt>", 'Set the system prompt (use """ for multiline or a path to a file within the current directory)')
+    table.add_row(
+        "/system <prompt>",
+        'Set the system prompt (use """ for multiline or a path to a file within the current directory)',
+    )
     table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
     console.print(table)
 
@@ -151,16 +157,20 @@ def _format_timestamp(iso_str):
         return ""
 
 
-def separate_thinking(text, ends):
-    """Return text with one "\\n" after each closing thinking tag in `ends`.
+# Drawn after the tag that closes a thinking block. conv2txt.py keeps its own copy.
+THINK_DELIMITER = "\n\n***\n\n"
 
-    The same rule as ThinkSeparator, for text that is already complete: the
-    newline is added unless one already follows the tag or the text ends there.
-    Empty tags are ignored. Display only; callers keep the stored text.
+
+def separate_thinking(text, ends):
+    """Return text with THINK_DELIMITER after each closing thinking tag in `ends`.
+
+    The same rule as ThinkSeparator, for text that is already complete: every "\\n"
+    that directly follows the tag is absorbed into the delimiter. Empty tags are
+    ignored. Display only; callers keep the stored text.
     """
     for end in ends:
         if end:
-            text = re.sub(re.escape(end) + r"(?=[^\r\n])", lambda m: m.group(0) + "\n", text)
+            text = re.sub(re.escape(end) + r"\n*", lambda m: end + THINK_DELIMITER, text)
     return text
 
 
@@ -168,8 +178,8 @@ def display_cat_conversation(name, conversation, model, think_pairs=()):
     """Print a saved conversation's messages to the console.
 
     think_pairs are the (start, end) thinking-tag pairs recorded in the file (the
-    caller validates them); a newline is drawn after each closing tag in assistant
-    replies, as in the live REPL. Message text is escaped so that text that merely
+    caller validates them); a delimiter line is drawn after each closing tag in
+    assistant replies, as in the live REPL. Message text is escaped so that text that merely
     looks like Rich markup (for example "[/THINK]" or "[/path]") prints literally
     instead of raising.
     """
@@ -234,12 +244,15 @@ def display_error(msg):
 
 
 class ThinkSeparator:
-    """Streaming helper: draw a newline after the tag that closes a thinking block.
+    """Streaming helper: draw THINK_DELIMITER after the tag that closes a thinking block.
 
     Some models (Gemma, gpt-oss) run straight from the closing tag into the
-    answer (`...144.<channel|>144`). feed() takes each streamed piece and returns
-    the text to draw for it: the same piece, with a single "\\n" inserted after
-    the closing tag unless a newline already follows it or the reply ends there.
+    answer (`...144.<channel|>144`); others write a blank line after it. feed()
+    takes each streamed piece and returns the text to draw for it: the same
+    piece, with THINK_DELIMITER inserted right after the closing tag and every "\\n"
+    that directly follows the tag dropped, so each side of the delimiter has one blank line
+    whatever the model wrote. The delimiter ends in newlines so the
+    display loop draws it at once instead of holding "***" as a partial word.
     The tag is matched on the accumulated text, so it may arrive split across
     pieces. This is display only: the caller keeps the reply text unchanged.
     """
@@ -247,30 +260,30 @@ class ThinkSeparator:
     def __init__(self, end):
         self.end = end
         self._tail = ""  # last len(end) - 1 characters seen
-        self._pending = False  # a closing tag ended exactly at the end of the previous piece
+        self._pending = False  # the text so far ends at a closing tag (plus newlines): drop leading "\n"s
 
     def feed(self, token):
         if not self.end:
             return token
         shown = []
+        cut = 0  # next index of `token` not yet copied to `shown`
         if self._pending and token:
-            self._pending = False
-            if token[0] not in "\r\n":
-                shown.append("\n")
+            cut = len(token) - len(token.lstrip("\n"))  # absorbed into the delimiter
+            self._pending = cut == len(token)  # all newlines: more may follow in the next piece
         window = self._tail + token
         base = len(self._tail)  # where this piece starts inside the window
-        cut = 0  # next index of `token` not yet copied to `shown`
         i = window.find(self.end, max(0, base - len(self.end) + 1))  # matches ending inside this piece
         while i != -1:
             end_at = i + len(self.end)
             rel = end_at - base
             shown.append(token[cut:rel])
+            shown.append(THINK_DELIMITER)
             cut = rel
-            if end_at < len(window):
-                if window[end_at] not in "\r\n":
-                    shown.append("\n")
-            else:
-                self._pending = True  # decided by the next piece
+            run = end_at
+            while run < len(window) and window[run] == "\n":
+                run += 1
+            cut = rel + (run - end_at)
+            self._pending = run == len(window)  # newlines may continue in the next piece
             i = window.find(self.end, end_at)
         shown.append(token[cut:])
         keep = len(self.end) - 1
@@ -282,7 +295,7 @@ def display_assistant_stream(token_generator, think_end=None):
     """Print streamed tokens live with word-wrap.
 
     think_end is the tag that closes the model's thinking block, if known; a
-    newline is then drawn after it (see ThinkSeparator). The returned text is
+    delimiter line is then drawn after it (see ThinkSeparator). The returned text is
     always exactly what the model produced.
 
     Returns the full response text.

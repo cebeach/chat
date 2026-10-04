@@ -64,9 +64,9 @@ def with_reply(reply, think_pairs=None):
 
 
 class TestThinkingSeparation:
-    def test_a_newline_is_added_after_a_recorded_closing_tag_and_survives_wrapping(self):
+    def test_a_delimiter_is_added_after_a_recorded_closing_tag_and_survives_wrapping(self):
         text = convert(with_reply("<|channel>thought\nwhy<channel|>The answer.", [GEMMA_PAIR]))
-        assert "why<channel|>\nThe answer." in text
+        assert "why<channel|>\n\n***\n\nThe answer." in text
 
     def test_user_messages_are_never_touched(self):
         text = convert(with_reply("a<channel|>b", [GEMMA_PAIR]))
@@ -78,11 +78,10 @@ class TestThinkingSeparation:
         assert convert(with_reply("why<channel|>The answer.", [["<think>", "</think>"]])) == base
         assert "why<channel|>The answer." in base
 
-    def test_a_reply_that_already_has_a_newline_or_ends_at_the_tag_is_unchanged(self, subtests):
+    def test_newlines_after_the_tag_are_absorbed_and_a_reply_ending_at_the_tag_gets_the_delimiter(self):
         pairs = [["<think>", "</think>"]]
-        for reply in ("why</think>\n\nanswer", "only thinking</think>"):
-            with subtests.test(reply=reply):
-                assert convert(with_reply(reply, pairs)) == convert(with_reply(reply))
+        assert "why</think>\n\n***\n\nanswer" in convert(with_reply("why</think>\n\nanswer", pairs))
+        assert "only thinking</think>\n\n***" in convert(with_reply("only thinking</think>", pairs))
 
     def test_malformed_think_pairs_are_ignored(self, subtests):
         base = convert(with_reply("why<channel|>The answer."))
@@ -111,6 +110,7 @@ class TestStandaloneAndParity:
         samples = [
             ("why<channel|>144", ["<channel|>"]),
             ("a</think>b</think>\nc</think>", ["</think>"]),
+            ("a</think>\n\nb</think></think>c", ["</think>"]),
             ("a<channel|>b</think>c", ["<channel|>", "</think>"]),
             ("a[/THINK]b", ["[/THINK]"]),
             ("nothing here", ["<channel|>"]),
