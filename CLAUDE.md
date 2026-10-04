@@ -37,6 +37,8 @@ Tests are pytest style (plain `assert`, `tmp_path`, `subtests`); mocking stays o
 
 Tests marked `integration` start a real llama-server (profiles in `tests/llama-server.toml`) and are skipped unless a models directory is configured. They are serial and always use port 8001, so a plain `pytest` fails on a configured machine while your own llama-server is running there; use `-m "not integration"` then. A plain run exercises the first profile only; `--llama-model all` (or a comma-separated list) runs every profile, one server after another. See `docs/testing.md`.
 
+`tests/test_prompt_pty.py` and `tests/test_repl_integration.py` run the real prompt, and the real `chat.py`, on a pseudo-terminal (`tests/pty_helpers.py`; stdlib only, no new dependency). `tests/test_turn_echo.py` pins which part of a turn `echo_suppressed()` wraps.
+
 ## Architecture
 
 Air-gapped terminal chat app talking to a local llama.cpp server. Six source files, no package structure:
@@ -45,7 +47,7 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Six source fil
 - **`config.py`** — Loads `~/.config/chat/config.toml` (stdlib `tomllib`), merges with `DEFAULTS` dict.
 - **`llama_client.py`** — `LlamaClient` wraps the llama-server native API (`/health`, `/props`, `/apply-template`, `/completion`). The model and its context length are read from `/props` before every turn (`refresh()`), never chosen by the client. `LlamaChatStream` is an iterable that yields tokens (SSE) and exposes `.stats` after iteration. Thinking tags are detected from the server per model (`find_think_tags()`, `LlamaClient.detect_think_tags()`); read `docs/thinking-tags.md` before changing that.
 - **`conversation.py`** — `Conversation` holds message history with timestamps. Handles save/load to JSON files in `~/.local/share/chat/conversations/`, pair recall, and system prompt.
-- **`ui.py`** — All terminal I/O via Rich. Streaming display writes raw tokens with word-wrap, then erases and re-renders as Markdown. Readline integration for input history and tab-completion of commands and conversation names.
+- **`ui.py`** — All terminal I/O via Rich. Streaming display writes raw tokens with word-wrap (it does not re-render as Markdown). The prompt is a plain `>>> ` read by readline (`get_user_input()`); `echo_suppressed()` keeps the tty from echoing keys typed during a model turn and must never be held across `input()` (readline entered with ECHO off draws nothing). Readline integration for input history and tab-completion of commands and conversation names.
 - **`conv2txt.py`** — Standalone CLI utility to convert saved conversation JSON to plain text.
 
 ### Documentation

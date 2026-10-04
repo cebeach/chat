@@ -360,6 +360,45 @@ None of that is built. The `vram_mb` keys are accepted and checked so that addin
 later does not change the config files, but nothing reads them, and a profile bigger than
 the budget is not an error.
 
+## Pseudo-terminal tests (the prompt and the tty)
+
+The prompt (`ui.get_user_input()`) and the echo handling (`ui.echo_suppressed()`) depend on a real tty
+and a real readline, so some tests run a small child process on a pseudo-terminal. They are offline: no
+model, no network, nothing on port 8001, and they need only the standard library.
+
+| File | What it covers |
+|---|---|
+| `tests/test_prompt.py` | Unit tests with mocks: the prompt string, that the prompt never reads `sys.stdin`, the single flush per call, Ctrl-C/Ctrl-D, the non-tty path, and every path of `echo_suppressed()` (restore on exit and on exceptions, a Ctrl-C landing during the tty call, no tty) |
+| `tests/test_turn_echo.py` | Runs one turn of the real `chat.main()` with a mocked client and an ordered event log, and asserts that suppression is on from the request to the trailing blank line and off at both prompts, for a normal turn and for each failure and interrupt path |
+| `tests/test_prompt_pty.py` | The prompt and the held fake reply on a pty (below) |
+| `tests/test_repl_integration.py` | `integration`: the real `chat.py` against the real server, one prompt, one reply, Ctrl-D, and the autosave. A round-trip smoke test; it does not detect the phantom character and asserts nothing about `ECHO` |
+
+How the pty tests work (`tests/pty_helpers.py`, `tests/prompt_child.py`, `tests/stream_child.py`):
+
+- The child gets the pty slave as stdin/stdout/stderr and as its controlling terminal (otherwise Ctrl-C and
+  `ISIG` do not behave as in a real session), a throwaway `HOME` (your history and conversations are never
+  touched), and the repository root as `cwd` and `PYTHONPATH` (a script run from `tests/` would otherwise
+  put `tests/` at `sys.path[0]` and `import ui` would fail). The child scripts are not named `test_*.py`,
+  so pytest does not collect them.
+- **No sleeps.** The helper waits for the exact coloured prompt sequence readline writes
+  (`\x1b[1;32m>>> \x1b[0m`; never the bare text `>>> `, which model output can contain) and counts the
+  prompts it has seen. Readline sets up the terminal before it draws the prompt, so keys sent once the
+  prompt is visible always arrive in the same state (the tests check this: ECHO and ICANON are off, ISIG is
+  on, as soon as the prompt appears, and the prompt is not redrawn by itself).
+- **Holds.** `stream_child.py` fakes a reply inside `echo_suppressed()`. After each token it tells the test
+  it is at a named hold and blocks on a pipe until the test releases it. At a hold the test reads the tty
+  flags with `tcgetattr` on the master and types keys, so the mid-reply state is checked at a known moment
+  instead of by luck. A second hold after the reply and before the prompt is what makes "ECHO is back"
+  checkable: once readline is running it clears ECHO itself, so a sample taken there says nothing.
+- The typed text used during the reply (`qzxj`) shares no character with the fake reply, so any
+  occurrence in the output can only be an echo.
+- There is **no Ctrl-Z test**. A child started in its own session has a parent outside that session, so
+  its process group is orphaned and the kernel ignores a terminal stop signal for it; the test could not
+  observe a stop. Ctrl-Z is checked by hand in a real terminal.
+
+What the pty tests cannot tell you is how your own terminal and shell behave (keyboard protocols, bracketed
+paste details, `fg` after Ctrl-Z, what `stty -a` shows). Check those by hand; `docs/input.md` lists what to expect.
+
 ## The code
 
 | File | Role |
@@ -368,6 +407,8 @@ the budget is not an error.
 | `tests/llama_server_config.py` | Loading and checking the config files, picking the profile, building the command line, the port check |
 | `tests/llama_server_process.py` | Starting the process, waiting for it, stopping it |
 | `tests/test_llama_server_fixture.py` | Offline tests of all of the above, and the integration smoke test |
+| `tests/pty_helpers.py` | Runs a child process on a pty: controlling terminal, throwaway `HOME`, prompt counting, holds, tty flags |
+| `tests/test_prompt.py`, `tests/test_turn_echo.py`, `tests/test_prompt_pty.py`, `tests/test_repl_integration.py` | The prompt and echo tests (see [Pseudo-terminal tests](#pseudo-terminal-tests-the-prompt-and-the-tty)) |
 | `tests/test_think_tags_integration.py` | Thinking-tag detection and a real reply, checked against each real model (see [Thinking-tag tests](#thinking-tag-tests)) |
 
 The offline tests never touch port 8001, your real `tests/llama-server.local.toml` or the
