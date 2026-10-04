@@ -34,3 +34,15 @@ vram_mb = 2153                     # memory this profile uses with its exact arg
 # args = [                         # flags for this model only, merged over the defaults
 #     "--ctx-size 8192",
 # ]
+
+[models.gemma-4-E2B-it-Q8_0]
+file = "gemma-4-E2B-it-Q8_0.gguf"
+vram_mb = 2666
+
+[models.openai_gpt-oss-20b-MXFP4]
+file = "openai_gpt-oss-20b-MXFP4.gguf"
+vram_mb = 9667
+
+[models.Ministral-3-3B-Instruct-2512-Q8_0]
+file = "Ministral-3-3B-Instruct-2512-Q8_0.gguf"
+vram_mb = 4539
