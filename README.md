@@ -22,7 +22,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 - **Local llama.cpp server** — uses whichever model the server is serving; its context window is read from the server
 - **Save/load conversations** — JSON files with tab-completed names; auto-saved after every reply and on exit
-- **Thinking blocks** — kept in saved files by default; `save_thinking = false` or `/config save_thinking [on|off]` omits them. Tags are detected from the server per model; details in [docs/thinking-tags.md](docs/thinking-tags.md)
+- **Thinking blocks** — kept in saved files by default, separate from the answer; `save_thinking = false` or `/config save_thinking [on|off]` omits them. Tags are detected from the server per model; details in [docs/thinking-tags.md](docs/thinking-tags.md)
 - **Files** — `/read <path> ...` sends text files as a message; `/system <file>` loads a system prompt from a file in the current directory (both limited by `read_file_max_kb`, 32 KB by default)
 - **Recall and retry** — `/recall <n>` re-injects an older exchange; `/retry` regenerates the last reply
 - **Stats** — tokens/sec, prompt tokens and context-window usage after each reply (`/stats` toggles), an 80% context warning, and `/info`

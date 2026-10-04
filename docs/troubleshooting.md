@@ -31,9 +31,11 @@ The conversation may have outgrown the context window. See
 [Statistics](statistics.md). Watch the `ctx` figure and the 80% warning.
 
 ## Thinking blocks are still in my saved files
-`save_thinking` only removes *balanced* blocks, using the tags detected for the
-model. `/config` shows them in the `think_tags` row. If it says `none detected`, set
-`think_start` and `think_end` in the config file. See [thinking-tags.md](thinking-tags.md).
+`save_thinking = false` leaves out the `thinking` field, but a reply is only split into
+`thinking` and `content` when tags were detected for that turn. `/config` shows them in the
+`think_tags` row. If it says `none detected`, set `think_start` and `think_end` in the config
+file. Files saved by earlier versions keep their reasoning inline in `content` and cannot be
+split. See [thinking-tags.md](thinking-tags.md).
 
 ## "File too large (N KB max)" / "File not found."
 `/read` and `/system <file>` refuse files above `read_file_max_kb` (default 32).

@@ -43,7 +43,7 @@ The next auto-save is skipped until there is at least one message again.
 `save_thinking`, the detected `think_tags`, and the model options. It re-reads the
 server first, so the model name is current.
 
-`/config save_thinking on|off` sets whether saved files keep the model's reasoning.
+`/config save_thinking on|off` sets whether saved files keep the model's reasoning (the `thinking` field of each reply).
 `/config save_thinking` with no argument toggles it. This is the only setting
 `/config` can change, and the change lasts for the current session only. Put
 `save_thinking = false` in [the config file](configuration.md) to make it permanent.

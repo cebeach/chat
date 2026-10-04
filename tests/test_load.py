@@ -14,7 +14,7 @@ import pytest
 import chat
 from chat import State, _reply_model, _sync_server_info, handle_command
 from config import DEFAULTS
-from conversation import MAX_THINK_PAIRS, Conversation
+from conversation import Conversation
 from llama_client import LlamaClient
 from tests.helpers import qwen_server, render
 
@@ -58,7 +58,6 @@ class TestLoadAppliesAgainstTheCurrentModel:
             config={**DEFAULTS, "conversations_dir": self.tmp},
             context_length=self.client.server_n_ctx,
             think_tags=self.client.think_tags,
-            think_pairs_seen=[("<think>", "</think>")],
         )
 
     def load(self):
@@ -151,35 +150,22 @@ class TestLoadAppliesTheSystemPromptSource:
 
 QWEN = ("<think>", "</think>")
 GEMMA = ("<|channel>thought", "<channel|>")
-GEMMA_REPLY = "<|channel>thought\nGemma reasoning\n<channel|>Gemma answer"
 
 
-def write_raw(tmp, name, pairs_raw=None, reply=GEMMA_REPLY):
-    """A saved file with arbitrary (even hostile) think_pairs content."""
-    data = {
-        "model": "/m/gemma.gguf",
-        "system_prompt": "",
-        "messages": [
-            {"role": "user", "content": "q"},
-            {"role": "assistant", "model": "/m/gemma.gguf", "content": reply},
-        ],
-    }
-    if pairs_raw is not None:
-        data["think_pairs"] = pairs_raw
-    (Path(tmp) / f"{name}.json").write_text(json.dumps(data))
+class TestLoadKeepsThinkingSeparate:
+    """A conversation is split when each reply is generated, so loading it needs
+    no tags: whatever model the loading session serves."""
 
-
-class TestLoadMergesRecordedThinkPairs:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
         self.tmp = str(tmp_path)
 
-    def session(self, seen, save_thinking=True):
+    def session(self, save_thinking=True, tags=None):
         return State(
             model="/m/qwen.gguf",
             config={**DEFAULTS, "conversations_dir": self.tmp, "save_thinking": save_thinking},
             context_length=4096,
-            think_pairs_seen=list(seen),
+            think_tags=tags,
             auto_save_name="auto_t",
         )
 
@@ -188,70 +174,63 @@ class TestLoadMergesRecordedThinkPairs:
         render(lambda: handle_command("/load", name, None, conv, state))
         return conv
 
-    def test_a_gemma_conversation_is_stripped_in_a_qwen_only_session(self):
-        # The scenario that used to leave the Gemma reasoning in the re-saved file.
-        gemma_session = Conversation()
-        gemma_session.add_user("q")
-        gemma_session.add_assistant(GEMMA_REPLY, model="/m/gemma.gguf")
-        gemma_session.save(self.tmp, name="f", model="/m/gemma.gguf", think_pairs=[GEMMA])
+    def save_gemma_conversation(self):
+        gemma = Conversation()
+        gemma.add_user("q")
+        gemma.add_assistant("Gemma answer", model="/m/gemma.gguf", thinking="Gemma reasoning")
+        gemma.save(self.tmp, name="f", model="/m/gemma.gguf")
 
-        state = self.session([QWEN], save_thinking=False)
+    def test_a_gemma_conversation_loads_whole_in_a_qwen_session(self):
+        self.save_gemma_conversation()
+        state = self.session(tags=(*QWEN, "detected"))
+        conv = self.load(state)
+        assert conv.messages[1]["thinking"] == "Gemma reasoning"
+        assert conv.messages[1]["content"] == "Gemma answer"
+        assert state.think_tags == (*QWEN, "detected")  # /load never touches the session's tags
+
+    def test_the_loaded_reasoning_is_not_sent_to_the_model(self):
+        self.save_gemma_conversation()
+        conv = self.load(self.session())
+        assert conv.get_messages()[-1] == {"role": "assistant", "content": "Gemma answer"}
+
+    def test_a_resave_with_save_thinking_off_drops_every_thinking_field(self):
+        self.save_gemma_conversation()
+        state = self.session(save_thinking=False, tags=(*QWEN, "detected"))
         conv = self.load(state)
         conv.add_user("follow-up")
-        conv.add_assistant("<think>qwen reasoning</think>Qwen answer", model="/m/qwen.gguf")
+        conv.add_assistant("Qwen answer", model="/m/qwen.gguf", thinking="qwen reasoning")
         render(lambda: handle_command("/save", "resaved", None, conv, state))
 
         data = json.loads((Path(self.tmp) / "resaved.json").read_text())
-        replies = [m["content"] for m in data["messages"] if m["role"] == "assistant"]
-        assert replies == ["Gemma answer", "Qwen answer"]
-        assert data["think_pairs"] == [list(QWEN), list(GEMMA)]  # the file records both now
-        assert conv.messages[1]["content"] == GEMMA_REPLY  # memory untouched
-
-    def test_pairs_are_added_without_duplicates_even_though_json_gives_lists(self):
-        write_raw(self.tmp, "f", [list(QWEN), list(GEMMA), list(GEMMA)])
-        state = self.session([QWEN])
-        self.load(state)
-        assert state.think_pairs_seen == [QWEN, GEMMA]
-        self.load(state)  # loading again changes nothing
-        assert state.think_pairs_seen == [QWEN, GEMMA]
-
-    def test_invalid_recorded_pairs_are_ignored(self):
-        hostile = [
-            ["", ""],  # would build a degenerate pattern
-            ["a b", "c"],  # whitespace inside
-            ["<x>", "so the answer is"],  # prose
-            ["<" + "x" * 80 + ">", "</x>"],  # too long
-            "not a pair",
-            ["<only-one>"],
-            [1, 2],
-            ["<ok>", "</ok>"],  # the one valid entry
+        assert [m["content"] for m in data["messages"] if m["role"] == "assistant"] == [
+            "Gemma answer",
+            "Qwen answer",
         ]
-        write_raw(self.tmp, "f", hostile)
-        state = self.session([QWEN])
-        self.load(state)
-        assert state.think_pairs_seen == [QWEN, ("<ok>", "</ok>")]
+        assert all("thinking" not in m for m in data["messages"])
+        assert "thinking" in conv.messages[1]  # memory untouched
 
-    def test_the_session_never_keeps_more_than_the_cap(self):
-        write_raw(self.tmp, "f", [[f"<t{i}>", f"</t{i}>"] for i in range(30)])
-        empty = self.session([])
-        self.load(empty)
-        assert len(empty.think_pairs_seen) == MAX_THINK_PAIRS
-        assert empty.think_pairs_seen[0] == ("<t0>", "</t0>")
-        nearly_full = self.session([(f"<s{i}>", f"</s{i}>") for i in range(MAX_THINK_PAIRS - 1)])
-        self.load(nearly_full)
-        assert len(nearly_full.think_pairs_seen) == MAX_THINK_PAIRS  # only one more fit
+    def test_a_file_with_a_legacy_think_pairs_key_is_ignored_not_interpreted(self):
+        reply = "<|channel>thought\nGemma reasoning\n<channel|>Gemma answer"
+        (Path(self.tmp) / "f.json").write_text(
+            json.dumps(
+                {
+                    "model": "/m/gemma.gguf",
+                    "system_prompt": "",
+                    "think_pairs": [list(GEMMA)],
+                    "messages": [
+                        {"role": "user", "content": "q"},
+                        {"role": "assistant", "content": reply},
+                    ],
+                }
+            )
+        )
+        conv = self.load(self.session())
+        assert conv.messages[1]["content"] == reply
+        assert "thinking" not in conv.messages[1]
+        assert not hasattr(conv, "think_pairs")
 
-    def test_an_old_file_without_the_key_changes_nothing(self):
-        write_raw(self.tmp, "f", None)
-        state = self.session([QWEN])
-        conv = self.load(state)
-        assert state.think_pairs_seen == [QWEN]
-        assert len(conv.messages) == 2
-
-    def test_the_toggle_warning_reflects_loaded_pairs(self):
-        write_raw(self.tmp, "f", [list(GEMMA)])
-        state = self.session([])
-        self.load(state)
+    def test_the_toggle_warning_says_replies_cannot_be_separated(self):
+        state = self.session(tags=None)
         with mock.patch.object(chat, "display_info") as info:
             handle_command("/config", "save_thinking off", None, Conversation(), state)
-        assert "earlier replies with known tags still are" in info.call_args.args[0]
+        assert "saved whole" in info.call_args.args[0]

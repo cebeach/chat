@@ -9,15 +9,11 @@ import chat
 import ui
 from chat import State, _auto_save, handle_command
 from config import DEFAULTS
-from conversation import MAX_THINK_PAIRS, Conversation
-from conversation import strip_think as _strip_think
+from conversation import Conversation, split_think
 
-THINK = "<think>\nreasoning here\n</think>\nThe answer."
-PAIRS = [("<think>", "</think>")]
-
-
-def strip_think(text):
-    return _strip_think(text, PAIRS)
+THINKING = "reasoning here"
+ANSWER = "The answer."
+TAGS = ("<think>", "</think>", "detected")
 
 
 def make_state(tmp, **config):
@@ -26,8 +22,7 @@ def make_state(tmp, **config):
         config={"conversations_dir": str(tmp), "auto_save": True, **config},
         context_length=None,
         auto_save_name="auto_test",
-        think_tags=("<think>", "</think>", "detected"),
-        think_pairs_seen=list(PAIRS),
+        think_tags=TAGS,
     )
 
 
@@ -35,102 +30,97 @@ def saved_messages(tmp, name):
     return json.loads((Path(tmp) / f"{name}.json").read_text())["messages"]
 
 
-class TestStripThink:
-    def test_balanced_blocks_removed(self):
-        assert strip_think(THINK) == "The answer."
-        assert strip_think("<think>a</think>X<think>b</think>Y") == "XY"
+class TestSplitThink:
+    def test_a_balanced_block_is_split_off_without_its_tags(self):
+        assert split_think("<think>\nreasoning here\n</think>\nThe answer.", TAGS) == (THINKING, ANSWER)
 
-    def test_unbalanced_left_byte_identical(self, subtests):
-        for text in [
-            "reasoning\n</think>\nanswer",  # lone closing tag
-            "<think>\nreasoning cut off [interrupted]",  # lone opening tag
-            "</think>a<think>",  # reversed
-            "no tags at all",
+    def test_tags_may_be_a_pair_or_the_three_item_tuple(self):
+        assert split_think("<t>a</t>b", ("<t>", "</t>")) == ("a", "b")
+        assert split_think("<t>a</t>b", ("<t>", "</t>", "config")) == ("a", "b")
+
+    def test_several_blocks_are_joined_with_a_blank_line(self):
+        assert split_think("<think>a</think>X<think>b</think>Y", TAGS) == ("a\n\nb", "XY")
+
+    def test_an_unclosed_block_takes_the_rest_and_leaves_no_content(self):
+        assert split_think("<think>\nreasoning cut off", TAGS) == ("reasoning cut off", "")
+        assert split_think("answer first<think>then cut off", TAGS) == ("then cut off", "answer first")
+
+    def test_the_stream_prefixed_opener_is_just_the_start_of_the_text(self):
+        # A forced-open template (Qwen) never generates the opener; the stream re-emits it.
+        assert split_think("<think>\nwhy\n</think>\n\nanswer", TAGS) == ("why", "answer")
+
+    def test_no_match_returns_the_text_untouched(self, subtests):
+        for tags, text in [
+            (None, "<think>a</think>b"),
+            (TAGS, "no tags at all"),
+            (TAGS, "reasoning\n</think>\nanswer"),  # a lone closer is not a block
+            (("", "</think>"), "<think>a</think>b"),
+            (("<think>", ""), "<think>a</think>b"),
+            (("[THINK]", "[/THINK]"), "<think>a</think>b"),  # another model's tags
         ]:
-            with subtests.test(text=text):
-                assert strip_think(text) == text
+            with subtests.test(tags=tags, text=text):
+                assert split_think(text, tags) == ("", text)
 
-    def test_pair_plus_stray_tag_only_removes_pair(self):
-        assert strip_think("<think>a</think> x </think>") == "x </think>"
-
-    def test_nested_only_the_innermost_balanced_pair_is_removed(self):
-        # The inner pair is balanced; the outer tags are strays and stay as evidence.
-        assert strip_think("<think><think>a</think>b") == "<think>b"
-        assert strip_think("<think>x<think>a</think>y</think>") == "<think>xy</think>"
+    def test_other_models_tags_in_the_text_are_left_alone(self):
+        assert split_think("<think>a</think>b [THINK]c[/THINK]", TAGS) == ("a", "b [THINK]c[/THINK]")
 
 
-class TestThinkPairsRecording:
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path):
-        self.tmp = str(tmp_path)
-        self.conv = Conversation()
-        self.conv.add_user("q")
-        self.conv.add_assistant(THINK)
+class TestAddAssistant:
+    def test_thinking_is_stored_before_content_when_given(self):
+        conv = Conversation()
+        conv.add_assistant(ANSWER, model="m", thinking=THINKING)
+        assert list(conv.messages[0]) == ["role", "timestamp", "model", "thinking", "content"]
 
-    def raw(self, name):
-        return json.loads((Path(self.tmp) / f"{name}.json").read_text())
+    def test_empty_or_missing_thinking_adds_no_key(self, subtests):
+        for thinking in (None, ""):
+            with subtests.test(thinking=thinking):
+                conv = Conversation()
+                conv.add_assistant(ANSWER, thinking=thinking)
+                assert "thinking" not in conv.messages[0]
 
-    def test_pairs_are_recorded_whenever_given_even_without_omit_think(self):
-        self.conv.save(self.tmp, name="x", think_pairs=PAIRS)  # omit_think left False
-        data = self.raw("x")
-        assert data["think_pairs"] == [["<think>", "</think>"]]
-        assert list(data)[-1] == "messages"  # messages stay last
-        assert data["messages"][1]["content"] == THINK  # nothing stripped
 
-    def test_the_key_is_omitted_when_there_are_no_pairs(self):
-        self.conv.save(self.tmp, name="none")
-        self.conv.save(self.tmp, name="empty", think_pairs=[])
-        assert "think_pairs" not in self.raw("none")
-        assert "think_pairs" not in self.raw("empty")
+class TestGetMessages:
+    def test_thinking_is_never_sent_to_the_model(self):
+        conv = Conversation(system_prompt="sys")
+        conv.add_user("q")
+        conv.add_assistant(ANSWER, thinking=THINKING)
+        assert conv.get_messages() == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": ANSWER},
+        ]
 
-    def test_at_most_the_most_recent_pairs_are_written(self):
-        pairs = [(f"<t{i}>", f"</t{i}>") for i in range(MAX_THINK_PAIRS + 4)]
-        self.conv.save(self.tmp, name="many", think_pairs=pairs)
-        written = self.raw("many")["think_pairs"]
-        assert len(written) == MAX_THINK_PAIRS
-        assert written[0] == ["<t4>", "</t4>"]  # the 4 oldest were dropped
-        assert written[-1] == [f"<t{MAX_THINK_PAIRS + 3}>", f"</t{MAX_THINK_PAIRS + 3}>"]
+    def test_an_empty_reply_is_left_out_with_the_user_message_before_it(self):
+        conv = Conversation()
+        conv.add_user("q1")
+        conv.add_assistant("", thinking="cut off")
+        conv.add_user("q2")
+        conv.add_assistant("a2")
+        conv.add_user("q3")
+        assert [m["content"] for m in conv.get_messages()] == ["q2", "a2", "q3"]
+        assert len(conv.messages) == 5  # memory untouched
 
-    def test_load_returns_tuples_and_a_resave_round_trips_them(self):
-        self.conv.save(self.tmp, name="x", think_pairs=PAIRS)
-        loaded, _ = Conversation.load(self.tmp, "x")
-        assert loaded.think_pairs == [("<think>", "</think>")]
-        assert isinstance(loaded.think_pairs[0], tuple)
-        loaded.save(self.tmp, name="again", think_pairs=loaded.think_pairs)
-        assert self.raw("again")["think_pairs"] == [["<think>", "</think>"]]
+    def test_only_the_assistant_message_goes_when_no_user_message_precedes_it(self):
+        conv = Conversation()
+        conv.add_assistant("a0")
+        conv.add_assistant("", thinking="cut off")
+        conv.add_user("q")
+        assert [m["content"] for m in conv.get_messages()] == ["a0", "q"]
 
-    def test_malformed_entries_are_dropped_structurally(self, subtests):
-        for name, raw in {
-            "notalist": "<think>",
-            "dict": {"a": "b"},
-            "null": None,
-            "short": [["<think>"]],
-            "long": [["<a>", "</a>", "<b>"]],
-            "nonstr": [[1, 2], ["<a>", None]],
-            "mixed": ["x", ["<ok>", "</ok>"], 5, ["<a>"]],
-        }.items():
-            (Path(self.tmp) / f"{name}.json").write_text(
-                json.dumps({"model": "m", "system_prompt": "", "think_pairs": raw, "messages": []})
-            )
-            with subtests.test(case=name):
-                loaded, _ = Conversation.load(self.tmp, name)
-                expected = [("<ok>", "</ok>")] if name == "mixed" else []
-                assert loaded.think_pairs == expected
+    def test_no_new_consecutive_user_pair_appears(self):
+        conv = Conversation()
+        conv.add_user("q1")
+        conv.add_assistant("a1")
+        conv.add_user("q2")
+        conv.add_assistant("", thinking="cut off")
+        conv.add_user("q3")
+        roles = [m["role"] for m in conv.get_messages()]
+        assert all(a != b for a, b in zip(roles, roles[1:]))
 
-    def test_a_file_without_the_key_loads_exactly_as_before(self):
-        (Path(self.tmp) / "old.json").write_text(
-            json.dumps({"model": "m", "system_prompt": "", "messages": [{"role": "user", "content": "q"}]})
-        )
-        loaded, model = Conversation.load(self.tmp, "old")
-        assert (loaded.think_pairs, model, len(loaded.messages)) == ([], "m", 1)
-
-    def test_a_loaded_file_never_yields_more_than_the_cap(self):
-        raw = [[f"<t{i}>", f"</t{i}>"] for i in range(1000)]
-        (Path(self.tmp) / "big.json").write_text(
-            json.dumps({"model": "m", "system_prompt": "", "think_pairs": raw, "messages": []})
-        )
-        loaded, _ = Conversation.load(self.tmp, "big")
-        assert len(loaded.think_pairs) == MAX_THINK_PAIRS
+    def test_a_pending_user_message_at_the_end_is_never_dropped(self):
+        conv = Conversation()
+        conv.add_user("q")
+        assert conv.get_messages() == [{"role": "user", "content": "q"}]
 
 
 class TestSave:
@@ -138,39 +128,49 @@ class TestSave:
     def _setup(self, tmp_path):
         self.tmp = str(tmp_path)
         self.conv = Conversation()
-        self.conv.add_user(f"keep this {THINK}")
-        self.conv.add_assistant(THINK)
+        self.conv.add_user("keep this <think>x</think>")
+        self.conv.add_assistant(ANSWER, thinking=THINKING)
         self.conv.add_user("again")
-        self.conv.add_assistant("lone\n</think>\nstray")
+        self.conv.add_assistant("plain reply")
 
-    def test_default_save_is_unchanged(self):
+    def raw(self, name):
+        return json.loads((Path(self.tmp) / f"{name}.json").read_text())
+
+    def test_the_file_has_no_think_pairs_and_messages_stay_last(self):
         self.conv.save(self.tmp, name="plain")
-        assert [m["content"] for m in saved_messages(self.tmp, "plain")] == [
-            m["content"] for m in self.conv.messages
-        ]
+        data = self.raw("plain")
+        assert "think_pairs" not in data
+        assert list(data)[-1] == "messages"
 
-    def test_omit_think_strips_assistant_only_and_keeps_memory(self):
+    def test_thinking_is_written_by_default(self):
+        self.conv.save(self.tmp, name="plain")
+        saved = saved_messages(self.tmp, "plain")
+        assert saved[1]["thinking"] == THINKING
+        assert saved[1]["content"] == ANSWER
+        assert "thinking" not in saved[3]
+
+    def test_omit_thinking_drops_the_field_and_keeps_memory(self):
         before = json.dumps(self.conv.messages)
-        self.conv.save(self.tmp, name="omit", omit_think=True, think_pairs=PAIRS)
+        self.conv.save(self.tmp, name="omit", omit_thinking=True)
         saved = saved_messages(self.tmp, "omit")
-        assert saved[0]["content"] == f"keep this {THINK}"  # user message untouched
-        assert saved[1]["content"] == "The answer."
-        assert saved[3]["content"] == "lone\n</think>\nstray"  # unbalanced untouched
+        assert all("thinking" not in m for m in saved)
+        assert [m["content"] for m in saved] == [m["content"] for m in self.conv.messages]
         assert saved[1]["role"] == "assistant"
         assert "timestamp" in saved[1]
         assert json.dumps(self.conv.messages) == before  # memory not mutated
 
-    def test_thinking_only_reply_is_kept_as_empty(self):
+    def test_a_thinking_only_reply_is_saved_with_empty_content(self):
         conv = Conversation()
         conv.add_user("q")
-        conv.add_assistant("<think>only thoughts</think>")
-        conv.save(self.tmp, name="empty", omit_think=True, think_pairs=PAIRS)
-        assert saved_messages(self.tmp, "empty")[1]["content"] == ""
+        conv.add_assistant("", thinking="only thoughts")
+        conv.save(self.tmp, name="empty")
+        saved = saved_messages(self.tmp, "empty")[1]
+        assert (saved["thinking"], saved["content"]) == ("only thoughts", "")
 
     def test_load_round_trip(self):
-        self.conv.save(self.tmp, name="rt", omit_think=True, think_pairs=PAIRS)
+        self.conv.save(self.tmp, name="rt")
         loaded, _ = Conversation.load(self.tmp, "rt")
-        assert loaded.messages[1]["content"] == "The answer."
+        assert loaded.messages == self.conv.messages
 
 
 class TestConfigCommand:
@@ -179,7 +179,7 @@ class TestConfigCommand:
         self.tmp = str(tmp_path)
         self.conv = Conversation()
         self.conv.add_user("q")
-        self.conv.add_assistant(THINK)
+        self.conv.add_assistant(ANSWER, thinking=THINKING)
 
     def run_config(self, state, args):
         with mock.patch.object(chat, "display_error") as err, mock.patch.object(chat, "display_info") as info:
@@ -232,12 +232,12 @@ class TestConfigCommand:
         show.assert_called_once()
 
     def test_save_and_autosave_honor_the_setting(self, subtests):
-        for setting, expected in [(True, THINK), (False, "The answer.")]:
+        for setting, expected in [(True, THINKING), (False, None)]:
             with subtests.test(save_thinking=setting):
                 state = make_state(self.tmp, save_thinking=setting)
                 with mock.patch.object(chat, "display_info"):
                     handle_command("/save", f"manual_{setting}", None, self.conv, state)
                 _auto_save(self.conv, state)
-                assert saved_messages(self.tmp, f"manual_{setting}")[1]["content"] == expected
-                assert saved_messages(self.tmp, "auto_test")[1]["content"] == expected
-        assert self.conv.messages[1]["content"] == THINK  # memory untouched
+                assert saved_messages(self.tmp, f"manual_{setting}")[1].get("thinking") == expected
+                assert saved_messages(self.tmp, "auto_test")[1].get("thinking") == expected
+        assert self.conv.messages[1]["thinking"] == THINKING  # memory untouched

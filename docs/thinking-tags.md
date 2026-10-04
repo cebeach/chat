@@ -83,10 +83,12 @@ Detection never raises, and has three outcomes:
 - **Conclusive none.** The server wrote no reasoning block, or shape validation / the guard
   rejected it, and Layer 2 found nothing. The active tags become `None` (a non-thinking model).
 - **Inconclusive.** Server error, unparseable response, or an anchor mismatch (for example a
-  template that embeds a timestamp that changed between the two renders). The previous value
-  is kept, so a transient problem cannot make the tags flip.
+  template that embeds a timestamp that changed between the two renders). If the server is
+  still the model the tags were last settled for, the previous value is kept, so a transient
+  problem cannot make the tags flip. If the server is a different model (a swap), the kept
+  tags would be the wrong model's, so the turn is refused: see below.
 
-It **fails closed**: when no pair is accepted, nothing is stripped. The app makes the no-op
+It **fails closed**: when no pair is accepted, replies are stored whole. The app makes the no-op
 visible instead of silent:
 
 - `/config` has a `think_tags` row (`<think> … </think> (detected)`, `… (config)` or
@@ -100,24 +102,22 @@ prefix needs it.
 
 ## Conversations that span models
 
-If you restart the server with another model and keep chatting, earlier replies carry the
-previous model's tags. The app remembers every pair it knows this session and strips all of them
-when saving.
+If you restart the server with another model and keep chatting, each reply is split with the
+tags detected for its own turn: the reasoning goes to the message's `thinking` field and the
+answer to `content`, and the tags are stored in neither. Nothing later needs the tags again, so
+`/load`, `/cat`, `conv2txt.py` and `save_thinking = false` work on a conversation written by a
+model this session never ran.
 
-Saved files also record the pairs the saving session knew (an optional `think_pairs` list, at
-most the 16 most recent), and `/load` merges them into the session. So loading a conversation
-written by a model this session never ran still lets `save_thinking = false` strip its replies
-when you save again. Pairs read from a file are untrusted: each must have the shape of a tag pair
-(non-empty, a run of markers and plain words, within the length limits) or it is ignored, and the
-session never keeps more than 16.
+If no tags are detected for a turn, the reply is stored whole in `content`, with its reasoning
+inline and no `thinking` field.
 
 `/load` applies the whole saved conversation (messages, system prompt and where that prompt came
 from) against the model being served now. The model names recorded in the file, both the
 file-level one and the one on each reply, are information only: they never select a model and are
 never sent to the server, and new replies are attributed to the model served now.
 
-Files saved before the `think_pairs` key existed carry no pairs, so their replies from a model
-this session never ran keep their reasoning when saved again; set the override to cover them.
+Files saved by earlier versions (a top-level `think_pairs` list, reasoning inline in `content`)
+are not interpreted: see [conversations.md](conversations.md#files-saved-by-earlier-versions).
 
 ## Display
 
@@ -136,12 +136,12 @@ The answer is 144.
 
 Any newlines the model itself writes directly after the tag are absorbed into the delimiter, so
 every model gets exactly one blank line on each side. The delimiter is also drawn when the reply
-ends at the tag. `/cat` and `conv2txt` do the same for assistant replies, using the pairs recorded
-in the saved file (a file saved without `think_pairs` is shown as it is). A `***` the model writes
+ends at the tag. `/cat` and `conv2txt` draw it between an assistant message's `thinking` and its
+`content` (the tags themselves are not stored, so they are not shown). A `***` the model writes
 itself looks the same as the delimiter.
 
-This is display only. The stored reply, the saved JSON, the history sent back to the model and
-strip-on-save never contain the added delimiter. `/cat` also escapes the text it prints, so a saved
+This is display only. The stored reply, the saved JSON and the history sent back to the model
+never contain the added delimiter. `/cat` also escapes the text it prints, so a saved
 reply containing something like `[/THINK]` or `[/path]` is shown literally instead of failing.
 
 ## Known limits
@@ -154,14 +154,19 @@ reply containing something like `[/THINK]` or `[/path]` is shown literally inste
 - **The tags are only as good as llama.cpp's own derivation plus the guard.** The guard is a
   word list: a template that implements thinking without any of those words fails closed.
 - **A wrong detection** is usually harmless, because the bogus pair never occurs in real
-  replies and nothing is stripped. The worst case is a reply that quotes the pair: the text
-  between the tags is removed from the *saved file* (never from memory), and only while
-  `save_thinking` is off.
+  replies and nothing is split off. The worst case is a reply that quotes the pair: the text
+  between the tags is stored as `thinking` instead of `content`.
+- **A swap whose tags cannot be determined is a hard failure.** When the server turns out to be
+  serving another model (a different model path or template) and detection is inconclusive,
+  the app does not reuse the previous model's tags. It prints the error and drops that
+  message instead of sending it; the next message detects again. Set `think_start` and
+  `think_end` in the config file to get past a model whose tags cannot be derived. The first
+  detection of a session has no previous model, so it never fails this way.
 - **Router mode** is not supported (`/props` has a different shape there).
-- **Outgoing history is not stripped.** The app sends each earlier reply back to the model
-  unchanged, including its reasoning. Qwen's template removes it itself, but for gpt-oss the
-  history then contains the model's earlier reasoning and its control tokens. Verified, and left
-  to a separate follow-up.
+- **Outgoing history carries the answer only.** Replies split at generation are sent back as
+  `content` without their reasoning. A reply stored whole (no tags detected for its turn) and a
+  conversation saved by an earlier version still carry their reasoning inline, and that is sent
+  back unchanged.
 
 ## How to check a new model
 

@@ -21,10 +21,7 @@ from tests.helpers import GEMMA_PAIR, QWEN_PAIR, devstral_server, gemma_server, 
 
 def make_state(model="/m/gemma.gguf", n_ctx=262144, tags=(*GEMMA_PAIR, "detected"), **kw):
     config = {**DEFAULTS, "conversations_dir": "/nonexistent"}
-    pairs = [tags[:2]] if tags else []
-    return State(
-        model=model, config=config, context_length=n_ctx, think_tags=tags, think_pairs_seen=pairs, **kw
-    )
+    return State(model=model, config=config, context_length=n_ctx, think_tags=tags, **kw)
 
 
 class TestSyncServerInfo:
@@ -88,7 +85,6 @@ class TestConfigRefresh:
         assert "/m/qwen.gguf" in out
         assert "→" not in again  # the swap was already announced
         assert "thinking tags:" not in again
-        assert state.think_pairs_seen == [GEMMA_PAIR, QWEN_PAIR]
 
     def test_the_toggle_warning_uses_the_refreshed_tags(self):
         # The state still holds a Gemma pair, but the server now serves a model
@@ -98,7 +94,7 @@ class TestConfigRefresh:
         with devstral_server().patched(), mock.patch.object(chat, "display_info") as info:
             handle_command("/config", "save_thinking off", client, Conversation(), state)
         warning = info.call_args_list[-1].args[0]
-        assert "will not be stripped" in warning
+        assert "saved whole" in warning
 
     def test_a_server_that_cannot_be_read_leaves_the_state_alone(self):
         server = gemma_server()
@@ -229,22 +225,23 @@ class TestPerMessageModel:
         assert "model" not in conv.messages[0]
         assert "model" not in conv.messages[2]
 
-    def test_save_load_round_trip_and_strip_think_preserve_the_model(self, tmp_path):
+    def test_save_load_round_trip_and_omit_thinking_preserve_the_model(self, tmp_path):
         conv = Conversation()
         conv.add_user("q")
-        conv.add_assistant("<think>t</think>answer", model="m1")
+        conv.add_assistant("answer", model="m1", thinking="t")
         tmp = str(tmp_path)
-        conv.save(tmp, name="x", model="last", omit_think=True, think_pairs=[("<think>", "</think>")])
+        conv.save(tmp, name="x", model="last", omit_thinking=True)
         loaded, _ = Conversation.load(tmp, "x")
         assert loaded.messages[1]["model"] == "m1"
         assert loaded.messages[1]["content"] == "answer"
+        assert "thinking" not in loaded.messages[1]
 
     def test_recalled_copies_carry_no_model(self):
         conv = Conversation()
         conv.add_user("q")
-        conv.add_assistant("a", model="m1")
+        conv.add_assistant("a", model="m1", thinking="t")
         conv.recall(1)
-        assert set(conv.messages[-1]) == {"role", "content"}
+        assert set(conv.messages[-1]) == {"role", "content"}  # no model, no thinking
 
 
 class TestCatShowsTheModel:

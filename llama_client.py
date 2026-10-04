@@ -102,6 +102,12 @@ def find_think_tags(continuation, generation, template_source):
     return (INCONCLUSIVE if anchor_failed else NONE), None
 
 
+class ThinkTagsError(RuntimeError):
+    """The server is serving a different model than the one the thinking tags
+    were last settled for, and its tags could not be determined. Raised by
+    chat() instead of splitting the reply with the previous model's tags."""
+
+
 class LlamaClient:
     def __init__(self, base_url="http://127.0.0.1:8001", think_override=None):
         """think_override: optional (start, end) from the config file; when set
@@ -110,6 +116,10 @@ class LlamaClient:
         self._think_cache = {}  # server identity -> (start, end); accepted pairs only
         self._think_current = (*think_override, "config") if think_override else None
         self._think_fixed = bool(think_override)
+        # Identity of the server the current tags were settled for (a pair, or a
+        # conclusive "none"); None until one was. See _detect_think_tags.
+        self._think_identity = None
+        self._think_unresolved = None  # error text while a model swap is unresolved
         # What the server is serving, from GET /props (see refresh); None until read.
         self.server_model = None
         self.server_n_ctx = None
@@ -168,7 +178,8 @@ class LlamaClient:
         is noticed; a None result is recomputed on the next call. A conclusive
         "no thinking tags" result clears the value, while an inconclusive one
         (server error, unparseable response, failed anchor) keeps the previous
-        value. Never raises.
+        value, except that after a model swap chat() then refuses to run (see
+        ThinkTagsError). Never raises.
         """
         self.refresh()
         return self._think_current
@@ -176,13 +187,17 @@ class LlamaClient:
     def _detect_think_tags(self, props):
         if self._think_fixed:
             return
+        self._think_unresolved = None
         try:
             source = props["chat_template"]
             identity = (props["model_path"], hashlib.sha256(source.encode()).hexdigest())
-            if identity in self._think_cache:
-                self._think_current = (*self._think_cache[identity], "detected")
-                return
+        except (KeyError, TypeError, AttributeError):
+            return  # cannot tell which model this is, so cannot tell a swap either
+        if identity in self._think_cache:
+            self._settle(identity, self._think_cache[identity])
+            return
 
+        try:
             user = {"role": "user", "content": SENTINEL_USER}
             continuation = self._apply_template(
                 [
@@ -199,13 +214,27 @@ class LlamaClient:
             generation = self._apply_template([user])
             status, pair = find_think_tags(continuation, generation, source)
         except (requests.RequestException, ValueError, KeyError, TypeError):
-            return
+            status, pair = INCONCLUSIVE, None
 
         if status == PAIR:
             self._think_cache[identity] = pair
-            self._think_current = (*pair, "detected")
+            self._settle(identity, pair)
         elif status == NONE:
-            self._think_current = None
+            self._settle(identity, None)
+        elif self._think_identity is not None and identity != self._think_identity:
+            # Inconclusive after a model swap: the kept tags belong to the previous
+            # model, so chat() must not use them. Without a swap the previous value
+            # stays, so a transient problem cannot make the tags flip.
+            self._think_unresolved = (
+                f"The server is now serving {props.get('model_alias') or props['model_path']}, "
+                "but its thinking tags could not be determined, so replies cannot be "
+                "separated from their reasoning. Retry, or set think_start and think_end "
+                "in the config file."
+            )
+
+    def _settle(self, identity, pair):
+        self._think_identity = identity
+        self._think_current = (*pair, "detected") if pair else None
 
     def chat(self, model, messages, options=None):
         """Send a chat request. Returns a LlamaChatStream that yields tokens.
@@ -216,11 +245,17 @@ class LlamaClient:
         attached to the returned stream as .server_model, .server_n_ctx and
         .think_tags.
 
+        Raises:
+            ThinkTagsError: The server swapped models and the new model's thinking
+                tags could not be determined (nothing is sent to /completion).
+
         Args:
             options: Dict of model parameters (seed, temperature, top_p).
                      None values are omitted.
         """
         self.refresh()
+        if self._think_unresolved:
+            raise ThinkTagsError(self._think_unresolved)
         think = self._think_current
         prompt = self._apply_template(messages, model=model)
         payload = {

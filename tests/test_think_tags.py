@@ -14,18 +14,20 @@ import pytest
 
 import chat
 import ui
-from chat import State, _auto_save, _think_override, _update_think_tags, handle_command
+from chat import State, _store_reply, _think_override, _update_think_tags, handle_command
 from config import DEFAULTS
-from conversation import Conversation, strip_think
+from conversation import Conversation, split_think
 from llama_client import (
     INCONCLUSIVE,
     NONE,
     PAIR,
     LlamaClient,
+    ThinkTagsError,
     find_think_tags,
     is_valid_think_pair,
 )
 from tests.helpers import (
+    FakeServer,
     DEVSTRAL_CONT,
     DEVSTRAL_GEN,
     DEVSTRAL_SRC,
@@ -164,46 +166,69 @@ class TestIsValidThinkPair:
         assert not is_valid_think_pair("<x>", "<" + "b" * 79 + ">")  # 81
 
 
-class TestStripWithDetectedPairs:
-    def test_gpt_oss_reply_becomes_just_the_answer(self):
-        assert strip_think(GPTOSS_REPLY, [GPTOSS_PAIR]) == "Hi"
+class TestSplitWithDetectedPairs:
+    def test_gpt_oss_reply_becomes_thinking_and_the_answer(self):
+        thinking, content = split_think(GPTOSS_REPLY, GPTOSS_PAIR)
+        assert thinking == 'The user says: "Say hi". That is one word.'
+        assert content == "Hi"
 
     def test_gemma_pair(self):
         text = "<|channel>thought\nreasoning\n<channel|>The answer."
-        assert strip_think(text, [GEMMA_PAIR]) == "The answer."
-        for untouched in ["a<channel|>b", "<|channel>thought only", "<channel|>x<|channel>thought"]:
-            assert strip_think(untouched, [GEMMA_PAIR]) == untouched
+        assert split_think(text, GEMMA_PAIR) == ("reasoning", "The answer.")
+        assert split_think("a<channel|>b", GEMMA_PAIR) == ("", "a<channel|>b")  # a lone closer
+        assert split_think("<|channel>thought only", GEMMA_PAIR) == ("only", "")  # never closed
 
-    def test_empty_pairs_leave_text_untouched(self):
-        assert strip_think(GPTOSS_REPLY, []) == GPTOSS_REPLY
+    def test_no_tags_leave_the_text_untouched(self):
+        assert split_think(GPTOSS_REPLY, None) == ("", GPTOSS_REPLY)
 
-    def test_each_pair_only_strips_its_own_tags(self):
+    def test_each_pair_only_splits_its_own_tags(self):
         qwen_reply = "<think>\nq\n</think>\nQ answer"
-        assert strip_think(qwen_reply, [GEMMA_PAIR]) == qwen_reply
-        assert strip_think(qwen_reply, [GEMMA_PAIR, QWEN_PAIR]) == "Q answer"
+        assert split_think(qwen_reply, GEMMA_PAIR) == ("", qwen_reply)
+        assert split_think(qwen_reply, QWEN_PAIR) == ("q", "Q answer")
 
 
-class TestMixedModelSave:
-    def test_a_conversation_spanning_models_is_stripped_for_both(self, tmp_path):
+class FakeStream:
+    def __init__(self, think_tags, model="m"):
+        self.think_tags = think_tags
+        self.model = model
+
+
+class TestStoreReply:
+    """The turn stores the reply split with the tags detected for that turn."""
+
+    def store(self, response, tags, conv=None):
+        conv = conv or Conversation()
+        conv.add_user("q")
+        _store_reply(conv, response, FakeStream(tags), make_state())
+        return conv.messages[-1]
+
+    def test_a_reply_with_detected_tags_is_stored_split(self):
+        msg = self.store(GPTOSS_REPLY, (*GPTOSS_PAIR, "detected"))
+        assert (msg["thinking"], msg["content"]) == ('The user says: "Say hi". That is one word.', "Hi")
+        assert msg["role"] == "assistant"
+
+    def test_without_tags_the_reply_is_stored_whole(self):
+        msg = self.store(GPTOSS_REPLY, None)
+        assert msg["content"] == GPTOSS_REPLY
+        assert "thinking" not in msg
+
+    def test_an_unclosed_block_leaves_empty_content_and_the_rest_as_thinking(self):
+        msg = self.store("<think>\nran out of tokens", (*QWEN_PAIR, "detected"))
+        assert (msg["thinking"], msg["content"]) == ("ran out of tokens", "")
+
+    def test_a_reply_without_thinking_has_no_thinking_key(self):
+        msg = self.store("just an answer", (*QWEN_PAIR, "detected"))
+        assert msg["content"] == "just an answer"
+        assert "thinking" not in msg
+
+    def test_a_conversation_spanning_models_is_split_per_turn(self, tmp_path):
         conv = Conversation()
-        conv.add_user("q1")
-        conv.add_assistant("<think>\nq\n</think>\nQwen answer")
-        conv.add_user("q2")
-        conv.add_assistant("<|channel>thought\ng\n<channel|>Gemma answer")
-        conv.add_user("q3")
-        conv.add_assistant("lone\n</think>\nstray")  # unbalanced: left alone
-        conv.add_user("q4")
-        conv.add_assistant("<|channel>thought\nno end")  # unbalanced: left alone
-        tmp = str(tmp_path)
-        conv.save(tmp, name="mixed", omit_think=True, think_pairs=[QWEN_PAIR, GEMMA_PAIR])
-        loaded, _ = Conversation.load(tmp, "mixed")
-        replies = [m["content"] for m in loaded.messages if m["role"] == "assistant"]
-        assert replies == [
-            "Qwen answer",
-            "Gemma answer",
-            "lone\n</think>\nstray",
-            "<|channel>thought\nno end",
-        ]
+        self.store("<think>\nq\n</think>\nQwen answer", (*QWEN_PAIR, "detected"), conv)
+        self.store("<|channel>thought\ng\n<channel|>Gemma answer", (*GEMMA_PAIR, "detected"), conv)
+        conv.save(str(tmp_path), name="mixed")
+        loaded, _ = Conversation.load(str(tmp_path), "mixed")
+        replies = [(m["thinking"], m["content"]) for m in loaded.messages if m["role"] == "assistant"]
+        assert replies == [("q", "Qwen answer"), ("g", "Gemma answer")]
 
 
 class TestDetection:
@@ -273,6 +298,60 @@ class TestDetection:
             # new model whose renders do not line up and with nothing for layer 2
             server.become("/m/odd.gguf", "no words", QWEN_CONT.replace("<|im_start|>user", "X"), QWEN_GEN)
             assert self.client.detect_think_tags() == before
+
+    ODD = ("/m/odd.gguf", "no words", QWEN_CONT.replace("<|im_start|>user", "X"), QWEN_GEN)
+
+    def test_chat_refuses_after_a_swap_whose_tags_cannot_be_determined(self):
+        server = qwen_server()
+        with server.patched():
+            assert self.client.detect_think_tags() is not None
+            server.become(*self.ODD)
+            posted = []
+            orig_post = server.post
+            server.post = lambda url, **kw: posted.append(url) or orig_post(url, **kw)
+            with pytest.raises(ThinkTagsError, match=r"/m/odd\.gguf.*think_start"):
+                self.client.chat("m", [{"role": "user", "content": "hi"}])
+            assert not any(u.endswith("/completion") for u in posted)
+
+    def test_it_keeps_refusing_until_the_tags_are_known_again(self):
+        server = qwen_server()
+        with server.patched():
+            self.client.detect_think_tags()
+            server.become(*self.ODD)
+            for _ in range(2):
+                with pytest.raises(ThinkTagsError):
+                    self.client.chat("m", [{"role": "user", "content": "hi"}])
+            server.become("/m/gemma.gguf", GEMMA_SRC, GEMMA_CONT, GEMMA_GEN)
+            stream = self.client.chat("m", [{"role": "user", "content": "hi"}])
+            assert stream.think_tags[:2] == GEMMA_PAIR
+
+    def test_a_swap_back_to_the_settled_model_does_not_refuse(self):
+        server = qwen_server()
+        with server.patched():
+            self.client.detect_think_tags()
+            server.become(*self.ODD)
+            self.client.detect_think_tags()
+            server.become("/m/qwen.gguf", QWEN_SRC, QWEN_CONT, QWEN_GEN)
+            assert self.client.chat("m", [{"role": "user", "content": "hi"}]).think_tags[:2] == QWEN_PAIR
+
+    def test_no_swap_means_no_refusal(self):
+        # The first detection of all has no previous model whose tags could be stale.
+        server = FakeServer(*self.ODD)
+        with server.patched():
+            stream = self.client.chat("m", [{"role": "user", "content": "hi"}])
+        assert stream.think_tags is None
+
+    def test_the_config_override_is_never_refused(self):
+        client = LlamaClient("http://llama.test", think_override=("<a>", "</a>"))
+        server = qwen_server()
+        with server.patched():
+            client.detect_think_tags()
+            server.become(*self.ODD)
+            assert client.chat("m", [{"role": "user", "content": "hi"}]).think_tags == (
+                "<a>",
+                "</a>",
+                "config",
+            )
 
     def test_the_config_override_wins_and_makes_no_template_calls(self):
         client = LlamaClient("http://llama.test", think_override=("[A]", "[/A]"))
@@ -359,26 +438,22 @@ class TestToggleWarning:
         state = make_state()
         msg = self.run_toggle(state)
         assert (
-            msg
-            == "save_thinking: off (no thinking tags known for the current model, so its replies will not be stripped)"
+            msg == "save_thinking: off (no thinking tags known for the current model, "
+            "so its replies cannot be separated and are saved whole)"
         )
 
-    def test_the_warning_mentions_earlier_replies_when_pairs_were_seen(self):
-        state = make_state(think_pairs_seen=[QWEN_PAIR])
-        assert "; earlier replies with known tags still are)" in self.run_toggle(state)
-
     def test_off_with_an_active_pair_is_plain(self):
-        state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
+        state = make_state(think_tags=(*QWEN_PAIR, "detected"))
         assert self.run_toggle(state) == "save_thinking: off"
 
     def test_on_never_warns(self):
         assert self.run_toggle(make_state(), "save_thinking on") == "save_thinking: on"
 
     def test_a_swap_to_a_model_without_tags_is_flagged_at_the_next_toggle(self):
-        state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
+        state = make_state(think_tags=(*QWEN_PAIR, "detected"))
         with mock.patch.object(chat, "display_info"):
             _update_think_tags(state, None)
-        assert "will not be stripped" in self.run_toggle(state)
+        assert "saved whole" in self.run_toggle(state)
 
 
 class TestChangeAnnouncement:
@@ -395,20 +470,14 @@ class TestChangeAnnouncement:
         assert "thinking tags: <|channel>thought … <channel|> (detected)" in out[0]
 
     def test_unchanged_or_source_only_changes_print_nothing(self):
-        state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
+        state = make_state(think_tags=(*QWEN_PAIR, "detected"))
         assert self.announce(state, (*QWEN_PAIR, "detected")) == []
         assert self.announce(state, (*QWEN_PAIR, "config")) == []
 
     def test_going_to_none_is_announced(self):
-        state = make_state(think_tags=(*QWEN_PAIR, "detected"), think_pairs_seen=[QWEN_PAIR])
+        state = make_state(think_tags=(*QWEN_PAIR, "detected"))
         assert self.announce(state, None) == ["thinking tags: none detected for the current model"]
         assert self.announce(state, None) == []  # not again
-
-    def test_pairs_seen_accumulate_without_duplicates(self):
-        state = make_state()
-        for tags in [(*QWEN_PAIR, "detected"), (*GEMMA_PAIR, "detected"), (*QWEN_PAIR, "config"), None]:
-            self.announce(state, tags, announce=False)
-        assert state.think_pairs_seen == [QWEN_PAIR, GEMMA_PAIR]
 
     def test_bracket_tags_are_announced_without_raising(self):
         state = make_state()
@@ -424,25 +493,3 @@ class TestChangeAnnouncement:
             server.fail = True
             assert self.announce(state, client.detect_think_tags()) == []
         assert state.think_tags == (*QWEN_PAIR, "detected")
-
-
-class TestSavePathsUseSeenPairs:
-    def test_save_and_autosave_strip_with_all_seen_pairs(self, tmp_path):
-        conv = Conversation()
-        conv.add_user("q")
-        conv.add_assistant(GPTOSS_REPLY)
-        tmp = str(tmp_path)
-        state = State(
-            model="m",
-            config={"conversations_dir": tmp, "auto_save": True, "save_thinking": False},
-            context_length=None,
-            auto_save_name="auto_t",
-            think_pairs_seen=[GPTOSS_PAIR],
-        )
-        with mock.patch.object(chat, "display_info"):
-            handle_command("/save", "manual", None, conv, state)
-        _auto_save(conv, state)
-        for name in ("manual", "auto_t"):
-            loaded, _ = Conversation.load(tmp, name)
-            assert loaded.messages[1]["content"] == "Hi"
-        assert conv.messages[1]["content"] == GPTOSS_REPLY  # memory untouched
