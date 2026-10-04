@@ -23,6 +23,9 @@ HOST = "127.0.0.1"
 LLAMA_TEST_PORT = 8001
 DEFAULT_STARTUP_TIMEOUT = 120
 
+# --llama-model all: every profile, one after another (not a valid profile name)
+ALL_PROFILES = "all"
+
 # Flags the fixture sets itself (-m, --host, --port); [defaults] and a profile may not.
 RESERVED_FLAGS = frozenset({"-m", "--model", "--host", "--port"})
 
@@ -197,6 +200,11 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
     profiles = {}
     for name, table in models.items():
         where = f"profile {name!r}"
+        if name == ALL_PROFILES or "," in name or name != name.strip():
+            raise LlamaTestConfigError(
+                f"{where} cannot be used as a profile name: {ALL_PROFILES!r} selects every profile, "
+                "a comma separates names in a selection, and names have no surrounding spaces"
+            )
         if not isinstance(table, dict):
             raise LlamaTestConfigError(f"{where} must be a table")
         _check_keys(table, {"file", "args", "remove", "chat_template", "vram_mb", "startup_timeout"}, where)
@@ -239,6 +247,31 @@ def select_profile(config, name=None):
     except KeyError:
         valid = ", ".join(config.profiles)
         raise LlamaTestConfigError(f"unknown profile {name!r} (valid profiles: {valid})") from None
+
+
+def select_profile_names(config, spec=None):
+    """The profile names a run exercises, in file order or in the order given.
+
+    No spec (the default) is the first profile only, so a plain run loads one model.
+    "all" is every profile; "a,b" is those two. Each name becomes one server start, one
+    after another, so the cost is one model load per name.
+    """
+    names = list(config.profiles)
+    if not names:
+        raise LlamaTestConfigError("no profiles defined")
+    if spec is None or not spec.strip():
+        return names[:1]
+    items = [item.strip() for item in spec.split(",")]
+    if "" in items:
+        raise LlamaTestConfigError(f"empty profile name in {spec!r}")
+    if ALL_PROFILES in items:
+        if len(items) > 1:
+            raise LlamaTestConfigError(f"{ALL_PROFILES!r} cannot be combined with other names: {spec!r}")
+        return names
+    for item in items:
+        if item not in config.profiles:
+            raise LlamaTestConfigError(f"unknown profile {item!r} (valid profiles: {', '.join(names)})")
+    return list(dict.fromkeys(items))
 
 
 def load_local(path=LOCAL_CONFIG):

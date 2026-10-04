@@ -35,7 +35,7 @@ Defined in `tests/conftest.py`.
 
 | Fixture | Scope | What you get |
 |---|---|---|
-| `llama_server` | session | A llama-server started once for the whole run. An object with `.url` (`http://127.0.0.1:8001`), `.port`, `.argv` (the full command line), `.profile` (the profile name) and `.log_dir` |
+| `llama_server` | session, one per profile | A llama-server for the profile the test is running against. An object with `.url` (`http://127.0.0.1:8001`), `.port`, `.argv` (the full command line), `.profile` (the profile name) and `.log_dir` |
 | `llama_client` | function | A new `LlamaClient` pointed at that server, already refreshed from `/props` |
 
 A test marks itself `integration` and asks for the fixture it needs:
@@ -48,26 +48,47 @@ def test_server_reports_a_context_size(llama_client):
     assert llama_client.server_n_ctx > 0
 ```
 
-The server starts when the first test that needs it runs, and stops at the end of the
-session. Integration tests talk to the real network, so they must not run inside
-`FakeServer.patched()` from `tests/helpers.py`.
+By default a test runs once, against the first profile. With `--llama-model` (below) it
+runs once per chosen profile: pytest starts one profile's server when the first test that
+needs it runs, runs every test that needs it, stops it, then starts the next. Servers never
+overlap, so only one model is in memory at a time and port 8001 is reused. Integration
+tests talk to the real network, so they must not run inside `FakeServer.patched()` from
+`tests/helpers.py`.
 
 ## Choosing a model
 
-One profile (one model) runs per pytest run, because loading a model is slow. Pick it
-with, in order of precedence:
+A plain run exercises **one** profile, the first in `tests/llama-server.toml`, because
+loading a model is slow. Asking for more is opt-in. The value is a profile name, a
+comma-separated list, or `all`, taken in order of precedence from:
 
-1. `--llama-model NAME` on the command line,
+1. `--llama-model VALUE` on the command line,
 2. the `LLAMA_TEST_MODEL` environment variable,
-3. otherwise the first profile in `tests/llama-server.toml`.
+3. otherwise the first profile only.
 
 ```bash
-venv/bin/python -m pytest -m integration --llama-model <profile>
+venv/bin/python -m pytest -m integration                                   # the first profile
+venv/bin/python -m pytest -m integration --llama-model gemma-4-E2B-it-Q8_0  # one named profile
+venv/bin/python -m pytest -m integration --llama-model "qwen35-2b-q8_0,gemma-4-E2B-it-Q8_0"
+venv/bin/python -m pytest -m integration --llama-model all                  # every profile
 ```
 
-To cover several models, run pytest once per profile. Run it from the repository root:
-the option is registered by `tests/conftest.py`, which pytest loads at startup only for
-runs that use the configured `testpaths` or a `tests/` path.
+How a selection runs:
+
+- Each profile is one server start, one after another, so the cost is one model load per
+  profile and per run. Every integration test runs once per profile, so adding tests
+  multiplies the time.
+- The test IDs show the profile, for example `test_server_smoke[gemma-4-E2B-it-Q8_0]`, and
+  one run gives one pass or fail across all of them.
+- A list runs in the order you give it, `all` in the order of the file, and a repeated
+  name runs once.
+- A profile that fails to start errors only its own tests. The others still run.
+- An unknown name is an error listing the valid profiles. It is reported when the
+  integration tests need the server, so `-m "not integration"` is unaffected.
+- `all` and names containing a comma or surrounding spaces cannot be profile names.
+
+Run it from the repository root: the option is registered by `tests/conftest.py`, which
+pytest loads at startup only for runs that use the configured `testpaths` or a `tests/`
+path.
 
 ## Profiles: `tests/llama-server.toml`
 
@@ -172,7 +193,7 @@ A `remove` entry that matches no default is an error, which catches a typo or an
 that would otherwise do nothing.
 
 To add a profile, add a `[models.<name>]` table with `file`, add any flags it needs under
-`args`, and run it once with `--llama-model <name>`.
+`args`, and run it once with `--llama-model <name>` (or add it to a run with `all`).
 
 ## Chat templates
 
@@ -303,7 +324,7 @@ the budget is not an error.
 
 | File | Role |
 |---|---|
-| `tests/conftest.py` | The fixtures, the `--llama-model` option, and the log-directory summary |
+| `tests/conftest.py` | The fixtures, the `--llama-model` option, the per-profile parametrization, and the log-directory summary |
 | `tests/llama_server_config.py` | Loading and checking the config files, picking the profile, building the command line, the port check |
 | `tests/llama_server_process.py` | Starting the process, waiting for it, stopping it |
 | `tests/test_llama_server_fixture.py` | Offline tests of all of the above, and the integration smoke test |

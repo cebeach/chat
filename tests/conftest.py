@@ -14,15 +14,40 @@ from tests import llama_server_config as cfg
 from tests.llama_server_process import start, stop
 
 LOG_DIRS = pytest.StashKey[list]()
+CONFIG_ERROR = pytest.StashKey[Exception]()
+
+# Stands in for a profile name when the profiles file cannot be read at collection time.
+# The error is raised when an integration test needs the server, not while collecting, so
+# runs that deselect the integration tests (-m "not integration") do not depend on the file.
+CONFIG_ERROR_ID = "invalid-llama-server-config"
 
 
 def pytest_addoption(parser):
     parser.addoption(
         "--llama-model",
         default=None,
-        help="profile in tests/llama-server.toml to launch for integration tests "
-        "(default: $LLAMA_TEST_MODEL, else the first profile)",
+        help="which profiles in tests/llama-server.toml the integration tests run against: "
+        "a name, a comma-separated list, or 'all' (default: $LLAMA_TEST_MODEL, else the first "
+        "profile only). Each profile is one server start, one after another",
     )
+
+
+def pytest_generate_tests(metafunc):
+    """Run every test that needs llama_server once per selected profile.
+
+    The fixture is session-scoped and parametrized, so pytest groups the tests by profile:
+    it starts one server, runs everything that needs it, stops it, then starts the next.
+    Servers never overlap, so only one model is in memory at a time and port 8001 is reused.
+    """
+    if "llama_server" not in metafunc.fixturenames:
+        return
+    spec = metafunc.config.getoption("--llama-model") or os.environ.get("LLAMA_TEST_MODEL")
+    try:
+        names = cfg.select_profile_names(cfg.load_config(), spec)
+    except cfg.LlamaTestConfigError as exc:
+        metafunc.config.stash[CONFIG_ERROR] = exc
+        names = [CONFIG_ERROR_ID]
+    metafunc.parametrize("llama_server", names, indirect=True, scope="session")
 
 
 @dataclass
@@ -36,13 +61,18 @@ class LlamaServer:
 
 @pytest.fixture(scope="session")
 def llama_server(request, tmp_path_factory):
-    """A llama-server started from tests/llama-server.toml, shared by the whole session.
+    """A llama-server started from tests/llama-server.toml for one profile.
 
-    Skips when no models directory is configured; every other problem is an error that
-    names the cause or points at llama-server.log.
+    Parametrized by the profile (see pytest_generate_tests): by default only the first
+    profile, or the ones chosen with --llama-model. Skips when no models directory is
+    configured; every other problem is an error that names the cause or points at
+    llama-server.log.
     """
+    name = getattr(request, "param", None)
+    if name == CONFIG_ERROR_ID:
+        raise request.config.stash[CONFIG_ERROR]
     try:
-        setup = cfg.resolve_setup(request.config.getoption("--llama-model"), os.environ)
+        setup = cfg.resolve_setup(name, os.environ)
     except cfg.NotConfigured as exc:
         pytest.skip(str(exc))
 

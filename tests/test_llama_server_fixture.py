@@ -232,6 +232,10 @@ class TestLoadConfig:
             ('[models.a]\nfile = "a"\nchat_template = "../x.jinja"\n', "plain filename"),
             ('[models.a]\nfile = "a"\nchat_template = "missing.jinja"\n', "does not exist"),
             ("[models.a\n", "not valid TOML"),
+            # names that would make a selection ambiguous
+            ('[models.all]\nfile = "a"\n', "cannot be used as a profile name"),
+            ('[models."a,b"]\nfile = "a"\n', "cannot be used as a profile name"),
+            ('[models." a"]\nfile = "a"\n', "cannot be used as a profile name"),
             # the args list
             ('[defaults.args]\nctx-size = 4096\n[models.a]\nfile = "a"\n', "must be a list of strings"),
             ('[models.a]\nfile = "a"\nargs = "--ctx-size 1"\n', "must be a list of strings"),
@@ -584,6 +588,123 @@ class TestStart:
             assert server.proc.poll() is None
         finally:
             proc_mod.stop(server)
+
+
+class TestSelectProfileNames:
+    """Which profiles a run exercises: the first by default, opt in to more."""
+
+    @pytest.fixture
+    def config(self, files):
+        return load(files)
+
+    def test_default_is_the_first_profile_only(self, config, subtests):
+        for spec in (None, "", "   "):
+            with subtests.test(spec=spec):
+                assert cfg.select_profile_names(config, spec) == ["alpha"]
+
+    def test_all_is_every_profile_in_file_order(self, config):
+        assert cfg.select_profile_names(config, "all") == ["alpha", "beta"]
+
+    def test_a_list_keeps_the_order_given_and_drops_repeats(self, config, subtests):
+        cases = {"beta": ["beta"], "beta,alpha": ["beta", "alpha"], " beta , alpha ": ["beta", "alpha"]}
+        cases["alpha,beta,alpha"] = ["alpha", "beta"]
+        for spec, expected in cases.items():
+            with subtests.test(spec=spec):
+                assert cfg.select_profile_names(config, spec) == expected
+
+    def test_errors_name_the_problem(self, config, subtests):
+        cases = {
+            "nope": r"unknown profile 'nope' \(valid profiles: alpha, beta\)",
+            "alpha,nope": "unknown profile 'nope'",
+            "alpha,,beta": "empty profile name",
+            ",": "empty profile name",
+            "all,alpha": "cannot be combined",
+        }
+        for spec, match in cases.items():
+            with subtests.test(spec=spec):
+                with pytest.raises(LlamaTestConfigError, match=match):
+                    cfg.select_profile_names(config, spec)
+
+
+class FakeConfig:
+    def __init__(self, option=None):
+        self.option = option
+        self.stash = pytest.Stash()
+
+    def getoption(self, name):
+        assert name == "--llama-model"
+        return self.option
+
+
+class FakeMetafunc:
+    """Just enough of pytest's Metafunc to see what the hook parametrizes."""
+
+    def __init__(self, fixturenames, option=None):
+        self.fixturenames = fixturenames
+        self.config = FakeConfig(option)
+        self.calls = []
+
+    def parametrize(self, argnames, argvalues, **kwargs):
+        self.calls.append((argnames, list(argvalues), kwargs))
+
+
+class TestGenerateTests:
+    """tests/conftest.py's pytest_generate_tests: one llama_server per selected profile."""
+
+    @pytest.fixture(autouse=True)
+    def profiles(self, files, monkeypatch):
+        config = load(files)
+        monkeypatch.setattr(cfg, "load_config", lambda *args, **kwargs: config)
+        monkeypatch.delenv("LLAMA_TEST_MODEL", raising=False)
+
+    @staticmethod
+    def run(fixturenames, option=None):
+        from tests import conftest as conftest_mod
+
+        metafunc = FakeMetafunc(fixturenames, option)
+        conftest_mod.pytest_generate_tests(metafunc)
+        return metafunc, conftest_mod
+
+    def test_tests_that_do_not_need_the_server_are_left_alone(self):
+        metafunc, _ = self.run(["tmp_path", "monkeypatch"])
+        assert metafunc.calls == []
+
+    def test_default_parametrizes_the_first_profile_only(self):
+        metafunc, _ = self.run(["llama_server"])
+        assert metafunc.calls == [("llama_server", ["alpha"], {"indirect": True, "scope": "session"})]
+
+    def test_a_test_using_only_llama_client_is_parametrized_too(self):
+        """metafunc.fixturenames is the whole closure, so llama_client pulls llama_server in."""
+        metafunc, _ = self.run(["llama_client", "llama_server"])
+        assert [call[1] for call in metafunc.calls] == [["alpha"]]
+
+    def test_all_and_lists(self, subtests):
+        for option, expected in {"all": ["alpha", "beta"], "beta,alpha": ["beta", "alpha"]}.items():
+            with subtests.test(option=option):
+                metafunc, _ = self.run(["llama_server"], option)
+                assert [call[1] for call in metafunc.calls] == [expected]
+
+    def test_the_environment_variable_is_used_and_the_option_wins(self, monkeypatch):
+        monkeypatch.setenv("LLAMA_TEST_MODEL", "beta")
+        assert [c[1] for c in self.run(["llama_server"])[0].calls] == [["beta"]]
+        assert [c[1] for c in self.run(["llama_server"], "alpha")[0].calls] == [["alpha"]]
+        monkeypatch.setenv("LLAMA_TEST_MODEL", "all")
+        assert [c[1] for c in self.run(["llama_server"])[0].calls] == [["alpha", "beta"]]
+
+    def test_a_bad_selection_is_raised_when_the_server_is_needed_not_while_collecting(self):
+        metafunc, conftest_mod = self.run(["llama_server"], "nope")
+        assert [call[1] for call in metafunc.calls] == [[conftest_mod.CONFIG_ERROR_ID]]
+        error = metafunc.config.stash[conftest_mod.CONFIG_ERROR]
+        assert isinstance(error, LlamaTestConfigError) and "unknown profile 'nope'" in str(error)
+
+    def test_an_unreadable_profiles_file_is_handled_the_same_way(self, monkeypatch):
+        def broken(*args, **kwargs):
+            raise LlamaTestConfigError("profiles file is not valid TOML")
+
+        monkeypatch.setattr(cfg, "load_config", broken)
+        metafunc, conftest_mod = self.run(["llama_server"])
+        assert [call[1] for call in metafunc.calls] == [[conftest_mod.CONFIG_ERROR_ID]]
+        assert "not valid TOML" in str(metafunc.config.stash[conftest_mod.CONFIG_ERROR])
 
 
 class TestCommittedConfig:
