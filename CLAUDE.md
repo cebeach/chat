@@ -29,6 +29,8 @@ venv/bin/python -m pytest tests/test_load.py::TestLoadMergesRecordedThinkPairs  
 
 Tests are pytest style (plain `assert`, `tmp_path`, `subtests`); mocking stays on `unittest.mock`. Fixtures and fakes shared between files live in `tests/helpers.py`.
 
+Tests marked `integration` start a real llama-server (profiles in `tests/llama-server.toml`) and are skipped unless a models directory is configured. They are serial and always use port 8001, so a plain `pytest` fails on a configured machine while your own llama-server is running there; use `-m "not integration"` then. See `docs/testing.md`.
+
 ## Architecture
 
 Air-gapped terminal chat app talking to a local llama.cpp server. Six source files, no package structure:
@@ -42,7 +44,7 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Six source fil
 
 ### Documentation
 
-`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too.
+`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too. `docs/testing.md` is for developers (the real-server test fixtures), is not part of the user guide, and must be updated when the profile format, the local settings or the fixture behavior changes.
 
 ### Data flow
 

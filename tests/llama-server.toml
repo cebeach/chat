@@ -1,0 +1,15 @@
+# Profiles for the llama-server integration tests: one table per model, kept in git so the
+# arguments for each model are reviewed like code. See docs/testing.md.
+#
+# `file` is a GGUF filename inside your models directory (models_dir in
+# tests/llama-server.local.toml, or $LLAMA_TEST_MODEL_DIR). The fixture sets -m, --host and
+# --port itself.
+
+[defaults.args]                    # flag name (without --) -> value, for every profile
+ctx-size = 4096
+n-gpu-layers = 99
+no-webui = true
+
+[models.qwen3-5-2b]
+file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
+chat_template = "qwen3.5.jinja"    # tests/chat-templates/qwen3.5.jinja
