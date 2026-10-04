@@ -62,5 +62,7 @@ press Enter to get it back.
 
 ## Other notes
 - Input piped into the app (`echo hi | python chat.py`) is read line by line.
-- Ctrl-Z suspends the app. The terminal is handled by readline and the shell, so the
-  prompt may need a keypress to redraw after `fg`.
+- Ctrl-Z suspends the app, and `fg` resumes it. If you suspended it at the prompt, the
+  prompt and the text typed so far are drawn again on `fg`. The cursor goes to the end of
+  that text, so if it was in the middle of the line, further edits are drawn a few columns
+  off until you press Enter.

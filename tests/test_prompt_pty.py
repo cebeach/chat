@@ -6,6 +6,8 @@ rest again, one character per later prompt. These tests drive a child process on
 readline and the real tty are involved. See docs/testing.md and tests/pty_helpers.py.
 """
 
+import os
+import signal
 import subprocess
 import sys
 
@@ -100,6 +102,39 @@ class TestThePrompt:
         child.send("ok\r")
         assert child.wait_got(1) == ["'ok'"]
 
+    def test_the_prompt_is_drawn_again_after_a_resume_at_an_idle_prompt(self, start):
+        # Ctrl-Z then fg delivers SIGCONT; readline does not redraw by itself (see ui._redraw_after_resume).
+        child = start()
+        child.wait_prompts(1)
+        os.kill(child.proc.pid, signal.SIGCONT)
+        child.wait_prompts(2)
+        child.settle()
+        assert child.prompts_seen() == 2  # exactly one redraw
+        child.send("ok\r")
+        assert child.wait_got(1) == ["'ok'"]
+
+    def test_the_prompt_and_the_text_typed_so_far_are_drawn_again_after_a_resume(self, start):
+        child = start()
+        child.wait_prompts(1)
+        child.send("abc")
+        child.wait_for(lambda out: b"abc" in out, "the typed text to be drawn")
+        os.kill(child.proc.pid, signal.SIGCONT)
+        child.wait_prompts(2)
+        child.settle()
+        assert child.after_prompt(2).startswith(b"abc")  # the line buffer is redrawn after the prompt
+        child.send("d\r")  # editing carries on from the end of the redrawn line
+        assert child.wait_got(1) == ["'abcd'"]
+
+    def test_a_resume_outside_the_prompt_draws_nothing(self, start):
+        # The handler exists only while the prompt is waiting; during a reply SIGCONT needs no redraw.
+        child = start(STREAM_CHILD, control=True)
+        child.wait_message("token")
+        before = child.out
+        os.kill(child.proc.pid, signal.SIGCONT)
+        child.settle()
+        assert PROMPT_SEQ not in child.out[len(before) :]
+        assert child.proc.poll() is None
+
     def test_ctrl_d_ends_the_child_with_status_zero(self, start):
         child = start()
         child.wait_prompts(1)
@@ -143,7 +178,7 @@ class TestEchoDuringAReply:
         child.wait_message("token")
         child.release()
         child.wait_message("done")  # reply and `with` finished, readline not entered yet
-        assert b"DONE" in child.out
+        child.wait_for(lambda out: b"DONE" in out, "DONE")
         assert child.flags() == {"ECHO": True, "ICANON": True, "ISIG": True}
         child.release()
         child.wait_prompts(1)

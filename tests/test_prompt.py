@@ -6,6 +6,7 @@ prompts. These tests pin the replacement. Real-terminal behaviour is in test_pro
 """
 
 import re
+import signal
 import termios
 from unittest import mock
 
@@ -103,6 +104,44 @@ class TestGetUserInput:
         with mock.patch("builtins.input", return_value="piped"):
             assert ui.get_user_input() == "piped"
         tcflush.assert_not_called()
+
+
+class TestRedrawAfterResume:
+    def test_it_writes_the_visible_prompt_and_the_line_on_a_cleared_row(self, capsys, monkeypatch):
+        monkeypatch.setattr(ui.readline, "get_line_buffer", lambda: "abc")
+        ui._redraw_after_resume(signal.SIGCONT, None)
+        # No \x01/\x02 (those are only for readline's width calculation), and nothing but the row.
+        assert capsys.readouterr().out == "\r\033[K\033[1;32m>>> \033[0mabc"
+
+    def test_it_is_installed_only_while_waiting_at_the_prompt_and_restored_after(self, stdin, tcflush):
+        before = signal.getsignal(signal.SIGCONT)
+        seen = []
+
+        def fake_input(prompt):
+            seen.append(signal.getsignal(signal.SIGCONT))
+            return "x"
+
+        with mock.patch("builtins.input", fake_input):
+            ui.get_user_input()
+        assert seen == [ui._redraw_after_resume]
+        assert signal.getsignal(signal.SIGCONT) == before
+
+    def test_it_is_restored_after_ctrl_c_ctrl_d_and_installed_again_for_each_reprompt(
+        self, stdin, tcflush, capsys
+    ):
+        before = signal.getsignal(signal.SIGCONT)
+        seen = []
+
+        def fake_input(prompt):
+            seen.append(signal.getsignal(signal.SIGCONT))
+            if len(seen) == 1:
+                raise KeyboardInterrupt
+            raise EOFError
+
+        with mock.patch("builtins.input", fake_input):
+            assert ui.get_user_input() is None
+        assert seen == [ui._redraw_after_resume, ui._redraw_after_resume]
+        assert signal.getsignal(signal.SIGCONT) == before
 
 
 class FakeTty:

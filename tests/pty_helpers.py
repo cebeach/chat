@@ -133,6 +133,9 @@ class PtyChild:
                 self._pending_messages += os.read(self._messages, 4096)
             if want in self._pending_messages:
                 self._pending_messages = self._pending_messages.split(want, 1)[1]
+                # The child wrote its terminal output before it wrote the message, but the pty and the
+                # pipe are different channels, so that output may not have been read yet.
+                self.settle(0.05)
                 return
         self._fail(f"timed out waiting for hold {name!r}")
 

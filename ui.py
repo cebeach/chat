@@ -1,6 +1,7 @@
 import contextlib
 import re
 import readline
+import signal
 import sys
 import termios
 from datetime import datetime
@@ -426,6 +427,20 @@ def _discard_pending_input():
             pass
 
 
+def _redraw_after_resume(signum, frame):
+    """Ctrl-Z then fg at the prompt: draw the prompt and the line being typed again.
+
+    Python runs readline with its own signal handling off (readline.c: rl_catch_signals = 0), and
+    readline redraws incrementally, so after the shell has taken over the screen it still believes
+    its prompt is visible and shows it only at the next new line. SIGWINCH cannot be used to force a
+    redraw (rl_resize_terminal() redraws only if the size changed), and the readline module has no
+    forced redisplay, so this writes the visible prompt and the line buffer on a cleared row. The
+    cursor ends at the end of the line: if it was mid-line, later edits are drawn a few columns off.
+    """
+    sys.stdout.write("\r\033[K" + re.sub("[\x01\x02]", "", PROMPT) + readline.get_line_buffer())
+    sys.stdout.flush()
+
+
 def get_user_input():
     """Prompt the user for input. Readline reads every key itself.
 
@@ -435,6 +450,8 @@ def get_user_input():
     """
     _discard_pending_input()  # once per call, so a re-prompt after Ctrl-C keeps what is typed next
     while True:
+        # Only while waiting at the prompt: a SIGCONT at any other time needs no redraw.
+        previous = signal.signal(signal.SIGCONT, _redraw_after_resume) or signal.SIG_DFL
         try:
             return input(PROMPT)
         except KeyboardInterrupt:
@@ -442,6 +459,8 @@ def get_user_input():
         except EOFError:
             print()
             return None
+        finally:
+            signal.signal(signal.SIGCONT, previous)
 
 
 def _set_tty(fd, attrs):

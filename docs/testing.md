@@ -392,9 +392,12 @@ How the pty tests work (`tests/pty_helpers.py`, `tests/prompt_child.py`, `tests/
   checkable: once readline is running it clears ECHO itself, so a sample taken there says nothing.
 - The typed text used during the reply (`qzxj`) shares no character with the fake reply, so any
   occurrence in the output can only be an echo.
-- There is **no Ctrl-Z test**. A child started in its own session has a parent outside that session, so
+- There is **no Ctrl-Z stop test**. A child started in its own session has a parent outside that session, so
   its process group is orphaned and the kernel ignores a terminal stop signal for it; the test could not
-  observe a stop. Ctrl-Z is checked by hand in a real terminal.
+  observe a stop. What `fg` does to the prompt is tested without a stop: the redraw is a `SIGCONT` handler
+  (`ui._redraw_after_resume`), so the tests send `SIGCONT` to the child at an idle prompt and with text
+  typed, and check that the prompt (and the text) is drawn again and that editing carries on. Whether it looks
+  right after a real Ctrl-Z and `fg` in your terminal is checked by hand.
 
 What the pty tests cannot tell you is how your own terminal and shell behave (keyboard protocols, bracketed
 paste details, `fg` after Ctrl-Z, what `stty -a` shows). Check those by hand; `docs/input.md` lists what to expect.
