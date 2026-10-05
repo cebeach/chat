@@ -31,7 +31,9 @@ Prints the command table.
 
 ## /cat <name>
 Prints the saved conversation `<name>` (see [`/conversations`](#conversations))
-without loading it. Thinking blocks are shown separately from the answer.
+without loading it. Thinking is left out: only each reply's answer is printed, and a
+reply that was only thinking is skipped. To read the thinking of a saved conversation use
+`conv2txt.py --keep-thinking` (see [Conversations](conversations.md)).
 Errors: `No saved conversation named '<name>'.`
 
 ## /clear

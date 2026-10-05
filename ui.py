@@ -157,17 +157,18 @@ def _format_timestamp(iso_str):
         return ""
 
 
-# Drawn after the tag that closes a thinking block. conv2txt.py keeps its own copy.
-THINK_DELIMITER = "\n\n***\n\n"
+# Drawn after the tag that closes a thinking block: one blank line before the
+# rule and two after it. conv2txt.py --keep-thinking has its own THINK_RULE.
+THINK_DELIMITER = "\n\n*** END OF THINKING ***\n\n\n"
 
 
 def display_cat_conversation(name, conversation, model):
     """Print a saved conversation's messages to the console.
 
-    An assistant message's thinking is drawn first, then a delimiter line, then
-    its content, as in the live REPL (without the tags, which are not stored).
-    Message text is escaped so that text that merely looks like Rich markup (for example "[/THINK]" or "[/path]") prints literally
-    instead of raising.
+    Thinking is left out: an assistant message prints its content only, and a
+    reply that was only thinking is skipped. Message text is escaped so that
+    text that merely looks like Rich markup (for example "[/THINK]" or
+    "[/path]") prints literally instead of raising.
     """
     console.print()
     console.print(f"[bold]Conversation:[/bold] {name}")
@@ -186,6 +187,8 @@ def display_cat_conversation(name, conversation, model):
         ts = msg.get("timestamp", "")
         ts_display = f"  [dim]{_format_timestamp(ts)}[/dim]" if ts else ""
 
+        if msg["role"] == "assistant" and not msg["content"] and msg.get("thinking"):
+            continue
         if msg["role"] == "user":
             pair_index += 1
             console.print(f"[dim]\\[{pair_index}][/dim] [user_label]You:[/user_label]{ts_display}")
@@ -195,9 +198,7 @@ def display_cat_conversation(name, conversation, model):
                 f"[dim]\\[{pair_index}][/dim] [assistant_label]Assistant:[/assistant_label]"
                 f"{ts_display}{model_display}"
             )
-        thinking = msg.get("thinking") if msg["role"] == "assistant" else None
-        content = f"{thinking}{THINK_DELIMITER}{msg['content']}" if thinking else msg["content"]
-        console.print(escape(content))
+        console.print(escape(msg["content"]))
         console.print()
 
 
@@ -236,9 +237,9 @@ class ThinkSeparator:
     answer (`...144.<channel|>144`); others write a blank line after it. feed()
     takes each streamed piece and returns the text to draw for it: the same
     piece, with THINK_DELIMITER inserted right after the closing tag and every "\\n"
-    that directly follows the tag dropped, so each side of the delimiter has one blank line
+    that directly follows the tag dropped, so the delimiter looks the same
     whatever the model wrote. The delimiter ends in newlines so the
-    display loop draws it at once instead of holding "***" as a partial word.
+    display loop draws it at once instead of holding the rule as a partial word.
     The tag is matched on the accumulated text, so it may arrive split across
     pieces. This is display only: the caller keeps the reply text unchanged.
     """
