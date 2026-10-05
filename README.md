@@ -20,6 +20,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 ## Features
 
+- **Instruction-tuned models only** — base models are not supported; see [docs/models.md](docs/models.md)
 - **Local llama.cpp server** — uses whichever model the server is serving; its context window is read from the server
 - **Save/load conversations** — JSON files with tab-completed names; auto-saved after every reply and on exit
 - **Thinking blocks** — kept in saved files by default, separate from the answer; `save_thinking = false` or `/config save_thinking [on|off]` omits them. Tags are detected from the server per model; details in [docs/thinking-tags.md](docs/thinking-tags.md)
@@ -34,7 +35,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 
 See the [user guide](docs/user-guide.md): [commands](docs/commands.md),
 [entering text](docs/input.md), [conversations](docs/conversations.md),
-[configuration](docs/configuration.md), [statistics](docs/statistics.md),
+[choosing a model](docs/models.md), [configuration](docs/configuration.md), [statistics](docs/statistics.md),
 [troubleshooting](docs/troubleshooting.md).
 
 ---
