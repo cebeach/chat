@@ -29,7 +29,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 - **Stats** — tokens/sec, prompt tokens and context-window usage after each reply (`/stats` toggles), an 80% context warning, and `/info`
 - **Model options** — `/set` for `seed`, `temperature` and `top_p` (session only)
 - **Input** — readline history (`~/.local/share/chat/history`), tab-completion of commands and conversation names, `"""` multiline input, Shift+Enter or Alt+Enter for a newline, bracketed paste
-- **Plain-text export** — `conv2txt.py` converts a saved conversation to text
+- **Plain-text export** — `conv2txt.py` converts a saved conversation to text (thinking omitted unless `--keep-thinking`)
 
 ## Documentation
 

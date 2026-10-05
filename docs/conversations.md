@@ -77,4 +77,9 @@ python conv2txt.py ~/.local/share/chat/conversations/notes.json
 python conv2txt.py notes.json -o notes.txt   # write to a file
 python conv2txt.py notes.json --no-header    # omit the model and system prompt header
 python conv2txt.py notes.json -l 80          # wrap at 80 columns (default 110)
+python conv2txt.py notes.json --keep-thinking  # include the thinking (see below)
 ```
+
+Thinking is left out by default, and a reply that was only thinking is skipped. With
+`--keep-thinking` each assistant message shows its thinking, then a `*** END OF THINKING ***`
+line, then its answer. The rule is never wrapped, whatever `-l` is.

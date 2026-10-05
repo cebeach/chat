@@ -6,6 +6,7 @@ Usage:
     python conv2txt.py conversation.json -o output.txt
     python conv2txt.py conversation.json --no-header
     python conv2txt.py conversation.json -l 80
+    python conv2txt.py conversation.json --keep-thinking
 
 This script now supports a ``--line-length`` option that controls the maximum
 number of characters per line in the output.  All output—including headers,
@@ -85,13 +86,12 @@ def wrap_block(text: str, width: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-# Drawn between an assistant message's thinking and its content. This script
-# stays standalone (it must not import the chat modules), so the delimiter is a
-# copy of ui.THINK_DELIMITER; a test keeps them in step.
-THINK_DELIMITER = "\n\n***\n\n"
+# Drawn between an assistant message's thinking and its content when thinking is
+# kept. It is never wrapped, so it stays one line whatever the line length.
+THINK_RULE = "*** END OF THINKING ***"
 
 
-def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
+def convert(data: dict, header: bool = True, line_length: int = 110, keep_thinking: bool = False) -> str:
     """Convert a conversation dict to plain text lines.
 
     Parameters
@@ -102,6 +102,10 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
         Whether to include the model/system prompt header.
     line_length: int
         Maximum characters per line.
+    keep_thinking: bool
+        Whether to include an assistant message's thinking, ended by THINK_RULE.
+        By default thinking is left out, and a reply that was only thinking is
+        skipped.
     """
     lines: list[str] = []
 
@@ -127,13 +131,15 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
             lines.append(wrapped_header.rstrip("\n"))
 
     # Message bodies
-    messages = data.get("messages", [])
+    messages = [
+        m
+        for m in data.get("messages", [])
+        if keep_thinking or m.get("role") != "assistant" or m.get("content") or not m.get("thinking")
+    ]
     for i, msg in enumerate(messages):
         role = msg.get("role", "unknown")
         content = msg.get("content", "")
-        thinking = msg.get("thinking") if role == "assistant" else None
-        if thinking:
-            content = f"{thinking}{THINK_DELIMITER}{content}"
+        thinking = msg.get("thinking") if keep_thinking and role == "assistant" else None
         ts = msg.get("timestamp", "")
         source_file = msg.get("source_file")
 
@@ -160,10 +166,13 @@ def convert(data: dict, header: bool = True, line_length: int = 110) -> str:
         if msg.get("model"):
             lines.append(f"[model: {msg['model']}]")
 
-        # Wrap the content of the message.
-        wrapped_content = wrap_block(content, line_length)
-        if wrapped_content:
-            lines.append(wrapped_content.rstrip("\n"))
+        # Wrap the content of the message; the thinking rule is added unwrapped.
+        parts = [wrap_block(content, line_length).rstrip("\n")]
+        if thinking:
+            parts = [wrap_block(thinking, line_length).rstrip("\n"), THINK_RULE, *parts]
+        body = "\n\n".join(p for p in parts if p)
+        if body:
+            lines.append(body)
 
         if i < len(messages) - 1:
             lines.append("")
@@ -192,6 +201,11 @@ def main() -> None:
         default=110,
         help="Maximum characters per line (default: 110)",
     )
+    parser.add_argument(
+        "--keep-thinking",
+        action="store_true",
+        help="Include the model's thinking, followed by a '*** END OF THINKING ***' line",
+    )
     args = parser.parse_args()
 
     if args.line_length < 1:
@@ -209,7 +223,9 @@ def main() -> None:
         print(f"Error: invalid JSON: {e}", file=sys.stderr)
         sys.exit(1)
 
-    text = convert(data, header=not args.no_header, line_length=args.line_length)
+    text = convert(
+        data, header=not args.no_header, line_length=args.line_length, keep_thinking=args.keep_thinking
+    )
 
     # Ensure the text ends with a newline
     if not text.endswith("\n"):

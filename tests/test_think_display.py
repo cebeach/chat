@@ -1,4 +1,4 @@
-"""A "***" line, with a blank line on each side, is drawn after the tag that closes a thinking block (display only).
+"""An "*** END OF THINKING ***" line is drawn after the tag that closes a thinking block (display only).
 
 Models differ: Qwen and DeepSeek already write "\\n\\n" after </think>, while Gemma
 and gpt-oss run straight from the closing tag into the answer. The stored reply
@@ -19,7 +19,7 @@ from config import DEFAULTS
 from conversation import Conversation
 from ui import ThinkSeparator, display_assistant_stream
 
-D = ui.THINK_DELIMITER  # "\n***\n"
+D = ui.THINK_DELIMITER  # "\n\n*** END OF THINKING ***\n\n\n"
 GEMMA_END = "<channel|>"
 GPTOSS_END = "<|end|><|start|>assistant<|channel|>final<|message|>"
 
@@ -247,21 +247,26 @@ class TestCatSeparation:
             handle_command("/cat", "saved", None, Conversation(), self.state)
         return re.sub(r"\x1b\[[0-9;]*m", "", cap.get())
 
-    def test_thinking_is_drawn_before_the_delimiter_and_the_content(self):
-        saved_conversation(self.tmp)
+    def test_thinking_is_left_out_and_the_content_is_shown(self):
+        saved_conversation(self.tmp, thinking="PRIVATE-REASONING")
         out = self.cat()
-        assert "why\n\n***\n\nThe answer." in out
+        assert "The answer." in out
+        assert "PRIVATE-REASONING" not in out
+        assert "***" not in out
         assert "question mentioning <channel|> literally" in out  # user text untouched
+
+    def test_a_reply_that_was_only_thinking_is_skipped(self):
+        saved_conversation(self.tmp, thinking="PRIVATE-REASONING", content="")
+        out = self.cat()
+        assert "PRIVATE-REASONING" not in out
+        assert "Assistant:" not in out
+        assert "You:" in out
 
     def test_a_reply_without_thinking_prints_as_its_content(self):
         saved_conversation(self.tmp, thinking=None, content="why<channel|>The answer.")
         out = self.cat()
         assert "why<channel|>The answer." in out
         assert "***" not in out
-
-    def test_a_reply_that_was_only_thinking_ends_with_the_delimiter(self):
-        saved_conversation(self.tmp, thinking="cut off", content="")
-        assert "cut off\n\n***" in self.cat()
 
     def test_a_legacy_think_pairs_key_changes_nothing(self):
         saved_conversation(self.tmp, thinking=None, content="why<channel|>The answer.")
@@ -280,7 +285,8 @@ class TestCatSeparation:
         conv.save(self.tmp, name="saved", model="/m/x.gguf")
         out = self.cat()
         assert "see [/path] please" in out
-        assert "[THINK]hmm[/THINK]\n\n***\n\nanswer [/etc/hosts]" in out
+        assert "answer [/etc/hosts]" in out
+        assert "hmm" not in out
 
     def test_the_stored_file_never_contains_the_delimiter(self):
         saved_conversation(self.tmp)
@@ -298,3 +304,7 @@ class TestThinkEnd:
 
     def test_none_when_no_tags_are_known(self):
         assert _think_end(self.state(None)) is None
+
+
+def test_the_delimiter_is_the_documented_literal():
+    assert ui.THINK_DELIMITER == "\n\n*** END OF THINKING ***\n\n\n"

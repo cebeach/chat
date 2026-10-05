@@ -123,22 +123,25 @@ are not interpreted: see [conversations.md](conversations.md#files-saved-by-earl
 
 Some models (Gemma, gpt-oss) run straight from the closing tag into the answer
 (`…The answer is 144.<channel|>144`); others (Qwen, DeepSeek) already write a blank line after
-it. Either way the end of the reasoning is easy to miss, so the REPL draws a `***` line directly
-after the active model's closing tag, as soon as the tag arrives, with a blank line on each side:
+it. Either way the end of the reasoning is easy to miss, so the REPL draws a `*** END OF THINKING ***`
+line directly after the active model's closing tag, as soon as the tag arrives, with one blank
+line before it and two after:
 
 ```text
 …The answer is 144.</think>
 
-***
+*** END OF THINKING ***
+
 
 The answer is 144.
 ```
 
 Any newlines the model itself writes directly after the tag are absorbed into the delimiter, so
-every model gets exactly one blank line on each side. The delimiter is also drawn when the reply
-ends at the tag. `/cat` and `conv2txt` draw it between an assistant message's `thinking` and its
-`content` (the tags themselves are not stored, so they are not shown). A `***` the model writes
-itself looks the same as the delimiter.
+every model gets the same spacing. The delimiter is also drawn when the reply ends at the tag. A
+`*** END OF THINKING ***` line the model writes itself looks the same as the delimiter.
+
+`/cat` and `conv2txt` leave the stored `thinking` out by default. `conv2txt --keep-thinking`
+prints it before the `content`, separated by the same `*** END OF THINKING ***` line, with one blank line on each side (the tags themselves are not stored, so they are not shown).
 
 This is display only. The stored reply, the saved JSON and the history sent back to the model
 never contain the added delimiter. `/cat` also escapes the text it prints, so a saved
