@@ -22,7 +22,8 @@ server. It works offline and talks only to the server you point it at.
    ```
 4. Type a message and press Enter. Type `/?` to list commands and `/exit` to quit.
 
-The model is always the one the server is running; the app never chooses one.
+The model is always the one the server is running; the app never chooses one. It must be
+an instruction-tuned model; see [Choosing a model](models.md).
 
 ## A first session
 
@@ -45,6 +46,7 @@ The conversation was also auto-saved, so even without `/save` it can be found wi
 | look up a command | [Command reference](commands.md) |
 | type multi-line text, use history and Tab, send files | [Entering text](input.md) |
 | set a system prompt, save, load or convert conversations | [Conversations](conversations.md) |
+| learn why only instruction-tuned models work | [Choosing a model](models.md) |
 | change the server URL, defaults, or what gets saved | [Configuration](configuration.md) |
 | understand the stats line and the context warning | [Statistics](statistics.md) |
 | fix a problem | [Troubleshooting](troubleshooting.md) |
