@@ -14,9 +14,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 DEFAULTS = {
     "system_prompt": "",
     "llama_url": "http://127.0.0.1:8001",
-    "conversations_dir": str(
-        Path.home() / ".local" / "share" / "chat" / "conversations"
-    ),
+    "conversations_dir": str(Path.home() / ".local" / "share" / "chat" / "conversations"),
     "auto_save": True,
     "save_thinking": True,
     # Optional override of the detected thinking tags (both must be non-empty).

@@ -48,13 +48,19 @@ A saved conversation is a JSON file:
   "system_prompt": "...",
   "messages": [
     {"role": "user", "timestamp": "2026-10-02T09:15:00.123456", "content": "..."},
+    {"role": "user", "timestamp": "...", "includes": [{"typed": "characters.txt", "path": "/home/me/characters.txt", "bytes": 2150}], "content": "..."},
     {"role": "assistant", "timestamp": "...", "model": "...", "thinking": "...", "content": "..."}
   ]
 }
 ```
 
-`source_file` appears only when it applies. A user message from `/read` also has
-`source_file`. An assistant message has `thinking` only when the reply had a thinking block
+`source_file` appears only when it applies: it is the file a system prompt was read from.
+A user message whose text includes files, through `@@<path>` or `/read`, has `includes`, one
+entry per file: `typed` (the path as written), `path` (resolved), `bytes`, and `empty: true`
+for a file that added no text. `content` holds the full text the model saw, with the files
+already spliced in; `includes` is only a record for `/cat`, `/info` and `conv2txt.py`, and is
+never sent to the model. Files saved by earlier versions have `source_file` on a `/read`
+message instead; they still load and `conv2txt.py` still shows it. An assistant message has `thinking` only when the reply had a thinking block
 and `save_thinking` is on; `content` is then the answer alone, without the thinking or its tags.
 A reply that was only thinking (cut off by the token limit) has an empty `content`; it and the
 question before it are left out of the history sent to the model.

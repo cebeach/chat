@@ -75,9 +75,12 @@ not to the file you loaded. Use `/save <name>` to write changes back.
 Reads one or more UTF-8 text files and sends their contents to the model at once as
 your next message. Quote paths that contain spaces: `/read "my notes.txt" other.txt`.
 `~` is expanded and relative paths are relative to where you started the app.
-Files are joined with a newline. A file that is missing, unreadable, or larger than
-`read_file_max_kb` (default 32) is reported and skipped; the rest are still sent.
-The paths are recorded in the saved conversation as `source_file`.
+Files are joined the way `@@<path>` includes are: a blank line between them, and each
+file's leading and trailing newlines dropped. A file that is missing, unreadable, or
+larger than `read_file_max_kb` (default 32) is reported by name and nothing is sent. The
+files are recorded in the saved conversation as `includes`, shown by `/cat` and `/info`.
+To put a file in the middle of a longer message, use `@@<path>` instead; see
+[input](input.md#sending-files).
 
 ## /recall <n>
 Copies the n-th question-and-answer pair (counting from 1) to the end of the

@@ -39,8 +39,43 @@ and is available with the arrow keys in later sessions.
 - After `/load ` or `/cat `, Tab completes saved conversation names.
 
 ## Sending files
-`/read <path> [<path> ...]` sends the contents of text files as your message. See
-[commands](commands.md#read-path-).
+Write `@@<path>` anywhere in a message to put a text file's contents there:
+
+```
+The story is set in a harbor town in winter. @@<characters.txt> Now Mara confronts Eli
+about the missing cargo.
+```
+
+The model receives one flat piece of text. It never sees the `@@<...>` marker or the
+path, only the file's text with a blank line between it and your own words:
+
+```
+The story is set in a harbor town in winter.
+
+<the contents of characters.txt>
+
+Now Mara confronts Eli about the missing cargo.
+```
+
+- The path ends at the first `>`, so it can contain spaces: `@@<my notes.txt>`. `~` is
+  expanded and relative paths are relative to where you started the app. A name that
+  contains `>` or starts or ends with a space cannot be written this way; use `/read`.
+- It works inside a `"""` block too, and as many files as you like.
+- The file's leading and trailing newlines are dropped. Text right after the closing `>`
+  (a comma, say) stays as you typed it, after the blank line. Newlines you typed around
+  the marker are kept. A file that is empty or only whitespace adds nothing.
+- Text inside an included file is never expanded, so a `@@<...>` in it stays as it is.
+- If a file is missing, unreadable or larger than `read_file_max_kb`, an error names it,
+  the message is **not sent** and nothing is added to the conversation. Retype the message
+  (the up arrow recalls a one-line message, not a `"""` block). A `@@<` with no closing `>` on
+  its line is an error too; a message that ends up empty is not sent.
+- `@@count`, `@property` and similar text without `@@<` are untouched. To write a literal
+  `@@<`, put a backslash before it: `\@@<`.
+- The files are listed under the message by `/cat` and in `/info`, and saved with it in
+  the conversation file as `includes`. They are never sent to the model.
+
+`/read <path> [<path> ...]` sends the contents of text files as your message, joined the
+same way. See [commands](commands.md#read-path-).
 
 ## Stopping a reply
 Ctrl-C while a reply is streaming stops it and returns to the prompt. The part

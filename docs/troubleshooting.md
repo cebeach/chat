@@ -38,9 +38,10 @@ file. Files saved by earlier versions keep their reasoning inline in `content` a
 split. See [thinking-tags.md](thinking-tags.md).
 
 ## "File too large (N KB max)" / "File not found."
-`/read` and `/system <file>` refuse files above `read_file_max_kb` (default 32).
+`/read`, `@@<path>` and `/system <file>` refuse files above `read_file_max_kb` (default 32).
 Raise it in the config file, or split the file. Paths with spaces need quotes for
-`/read`.
+`/read`; inside `@@<...>` they need none. When an `@@<path>` or `/read` file cannot be
+read, the whole message is not sent and the error names the file.
 
 ## `/system file.txt` set the prompt to the file name
 A path is read as a file only if it exists and is inside the directory you started the

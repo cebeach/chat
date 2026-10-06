@@ -91,6 +91,21 @@ def wrap_block(text: str, width: int) -> str:
 THINK_RULE = "*** END OF THINKING ***"
 
 
+def includes_line(includes: list) -> str:
+    """The '[included: a.txt, 2.1 KB; ...]' annotation for a user message's includes.
+
+    This standalone script keeps its own copy of the size format used by ui.py.
+    """
+
+    def size(inc: dict) -> str:
+        if inc.get("empty"):
+            return "empty"
+        n = inc.get("bytes", 0)
+        return f"{n} B" if n < 1024 else f"{n / 1024:.1f} KB"
+
+    return "[included: " + "; ".join(f"{inc.get('typed', '?')}, {size(inc)}" for inc in includes) + "]"
+
+
 def convert(data: dict, header: bool = True, line_length: int = 110, keep_thinking: bool = False) -> str:
     """Convert a conversation dict to plain text lines.
 
@@ -161,6 +176,10 @@ def convert(data: dict, header: bool = True, line_length: int = 110, keep_thinki
         # Add source file annotation if present
         if source_file:
             lines.append(f"[from: {source_file}]")
+
+        # Files spliced into a user message with @@<path> or /read
+        if msg.get("includes"):
+            lines.append(includes_line(msg["includes"]))
 
         # Which model produced an assistant reply (a conversation can span models)
         if msg.get("model"):
