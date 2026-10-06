@@ -3,6 +3,7 @@
 
 import argparse
 from pathlib import Path
+import re
 import shlex
 import sys
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from ui import (
     display_conversation_info,
     display_conversations,
     display_error,
+    display_included_files,
     display_info,
     display_options,
     display_stats,
@@ -47,7 +49,7 @@ class State:
     last_stats: dict = field(default_factory=dict)
     retry_text: str | None = None
     auto_save_name: str = ""
-    last_read_file: str | None = None
+    pending_includes: list = field(default_factory=list)
     # Active thinking tags as (start, end, source), or None. See docs/thinking-tags.md.
     think_tags: tuple | None = None
 
@@ -85,6 +87,145 @@ def _read_file(path: str, config: dict) -> tuple[bool, str]:
     except Exception as e:
         return False, f"Cannot read file: {e}"
     return True, content
+
+
+# `@@<path>` splices a file into a prompt; `\@@<` is a literal `@@<`.
+_INCLUDE_OPEN = re.compile(r"\\@@<|@@<")
+_INCLUDE_PATH = re.compile(r"[^>\n]*")
+
+
+def _trailing_newlines(s):
+    return len(s) - len(s.rstrip("\n"))
+
+
+def _leading_newlines(s):
+    return len(s) - len(s.lstrip("\n"))
+
+
+def build_message(segments, config):
+    """Read the files in segments and splice them into one flat message.
+
+    segments is a list of ("text", str) and ("file", typed_path, shown_name)
+    tuples. Returns (flat_text, includes, errors). Any error (a file that is
+    missing, too large or unreadable, or a message with nothing left to send)
+    leaves flat_text empty: the caller must not send it.
+
+    A file's leading and trailing newlines are dropped and it is set off from
+    adjacent text by a blank line. Newlines typed around it are never removed,
+    and none are added at the very start or end of the message. A file that is
+    only whitespace counts as empty: it adds no text but still separates its
+    neighbours.
+    """
+    includes, errors, files = [], [], []
+    for seg in segments:
+        if seg[0] != "file":
+            continue
+        _, typed, shown = seg
+        ok, content = _read_file(typed, config)
+        if not ok:
+            errors.append(f"{shown}: {content}")
+            continue
+        path = Path(typed).expanduser().resolve()
+        include = {"typed": typed, "path": str(path), "bytes": path.stat().st_size}
+        if not content.strip():
+            include["empty"] = True
+        includes.append(include)
+        files.append(content)
+    if errors:
+        return "", [], errors
+
+    out = ""
+    after_file = False  # the last piece was a file: the next real text needs a blank line
+    file_no = 0
+    for i, seg in enumerate(segments):
+        if seg[0] == "text":
+            piece = seg[1]
+            # The token and the horizontal whitespace touching it are replaced.
+            if i > 0 and segments[i - 1][0] == "file":
+                piece = piece.lstrip(" \t")
+            if i + 1 < len(segments) and segments[i + 1][0] == "file":
+                piece = piece.rstrip(" \t")
+            if not piece:
+                continue
+            if not piece.strip():  # only newlines: keep them, add no separator
+                out += piece
+                continue
+            if after_file and out:
+                out += "\n" * max(0, 2 - _trailing_newlines(out) - _leading_newlines(piece))
+            out += piece
+            after_file = False
+        else:
+            content = files[file_no]
+            file_no += 1
+            if content.strip():
+                if out:
+                    out += "\n" * max(0, 2 - _trailing_newlines(out))
+                out += content.strip("\r\n")
+            after_file = True
+
+    if not out.strip():
+        names = ", ".join(seg[2] for seg in segments if seg[0] == "file")
+        return "", [], [f"Nothing to send: {names} is empty."]
+    return out, includes, []
+
+
+def expand_includes(text, config):
+    """Replace each `@@<path>` in text with the file's contents.
+
+    Returns (flat_text, includes, errors); see build_message. The model gets
+    only flat_text. `\\@@<` writes a literal `@@<`, and a `@@<` with no closing
+    `>` on its line is an error rather than a placeholder sent as typed.
+    Included files are not themselves expanded.
+    """
+    if "@@<" not in text:
+        return text, [], []
+    segments, errors, literal = [], [], []
+    pos = 0
+    while True:
+        m = _INCLUDE_OPEN.search(text, pos)
+        if m is None:
+            break
+        literal.append(text[pos : m.start()])
+        if m.group() != "@@<":  # \@@< : keep the literal @@<
+            literal.append("@@<")
+            pos = m.end()
+            continue
+        body = _INCLUDE_PATH.match(text, m.end())
+        end = body.end()
+        if end < len(text) and text[end] == ">":
+            typed = body.group().strip()
+            if typed:
+                segments.append(("text", "".join(literal)))
+                literal = []
+                segments.append(("file", typed, f"@@<{typed}>"))
+            else:
+                errors.append("@@<>: no file name between the brackets.")
+            pos = end + 1
+        else:
+            errors.append(f"Unterminated include: @@<{body.group()} (write \\@@< for a literal @@<)")
+            pos = end
+    literal.append(text[pos:])
+    segments.append(("text", "".join(literal)))
+    if errors:
+        # Still report any missing files, so one fix pass finds everything.
+        _, _, more = build_message(segments, config)
+        return "", [], errors + [e for e in more if not e.startswith("Nothing to send")]
+    return build_message(segments, config)
+
+
+def _prepare_user_message(text, state):
+    """Expand `@@<path>` includes in a typed message.
+
+    Returns (flat_text, includes), or None when the message must not be sent:
+    the errors are printed and nothing reaches the conversation or the model.
+    """
+    flat, includes, errors = expand_includes(text, state.config)
+    if errors:
+        for error in errors:
+            display_error(escape(error))
+        return None
+    display_included_files(includes)
+    return flat, includes
 
 
 def _handle_set(args, state):
@@ -367,6 +508,8 @@ def handle_command(cmd, args, client, conversation, state):
         else:
             conversation.messages.pop()  # remove assistant
             state.retry_text = conversation.messages[-1]["content"]
+            # The text is already flat; carry the files it came from, do not re-expand.
+            state.pending_includes = conversation.messages[-1].get("includes", [])
             conversation.messages.pop()  # remove user (REPL will re-add)
             state.last_stats = {}
 
@@ -380,22 +523,18 @@ def handle_command(cmd, args, client, conversation, state):
         except ValueError as e:
             display_error(f"Could not parse paths: {e}")
             return True
-        parts = []
-        read_paths = []
-        for name in filenames:
-            ok, content = _read_file(name, state.config)
-            if not ok:
-                display_error(content)
-                continue
-            parts.append(content)
-            read_paths.append(str(Path(name).expanduser().resolve()))
-        if parts:
-            combined = "\n".join(parts)
-            state.retry_text = combined
-            # Record only the files actually read, comma-separated
-            state.last_read_file = ", ".join(read_paths)
-            console.print("User:")
-            console.print(combined)
+        # Same splice rule and failure behaviour as @@<path>: any problem file aborts.
+        segments = [("file", name, name) for name in filenames]
+        combined, includes, errors = build_message(segments, state.config)
+        if errors:
+            for error in errors:
+                display_error(escape(error))
+            return True
+        state.retry_text = combined
+        state.pending_includes = includes
+        console.print("User:")
+        console.print(combined)
+        display_included_files(includes)
 
     elif cmd == "/config":
         _handle_config(args, state, client)
@@ -455,7 +594,6 @@ def main():
             "top_p": config["top_p"],
         },
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
-        last_read_file=None,
     )
     # Startup value for /config; no announcement (the /config row covers it).
     _update_think_tags(state, client.think_tags, announce=False)
@@ -497,21 +635,22 @@ def main():
                 if state.retry_text is not None:
                     text = state.retry_text
                     state.retry_text = None
-                    # Check if this text came from /read
-                    source_file = getattr(state, "last_read_file", None)
-                    if source_file:
-                        conversation.add_user(text, source_file=source_file)
-                        state.last_read_file = None
-                    else:
-                        conversation.add_user(text)
+                    # /read and /retry hand over the files the text came from
+                    conversation.add_user(text, includes=state.pending_includes)
+                    state.pending_includes = []
                 else:
                     # Commands don't become messages
                     continue
                 # Message already added above, skip to chat()
                 send_to_model = True
             else:
-                # Not a command, add as user message and send to model
-                conversation.add_user(text)
+                # Not a command: splice in any @@<path> files. A bad include aborts the send,
+                # so nothing is added to the conversation and the model never sees the text.
+                prepared = _prepare_user_message(text, state)
+                if prepared is None:
+                    continue
+                text, includes = prepared
+                conversation.add_user(text, includes=includes)
                 send_to_model = True
 
             # Echo is off for the whole turn (request, reply, stats, autosave) and comes back

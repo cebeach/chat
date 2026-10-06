@@ -162,6 +162,21 @@ def _format_timestamp(iso_str):
 THINK_DELIMITER = "\n\n*** END OF THINKING ***\n\n\n"
 
 
+def format_size(n):
+    """A byte count for people: '412 B' below 1 KB, else '2.1 KB'."""
+    return f"{n} B" if n < 1024 else f"{n / 1024:.1f} KB"
+
+
+def _include_size(inc):
+    return "empty" if inc.get("empty") else format_size(inc.get("bytes", 0))
+
+
+def display_included_files(includes):
+    """One dim line per file spliced into the message about to be sent."""
+    for inc in includes:
+        console.print(f"[dim]Included {escape(inc['typed'])} ({_include_size(inc)})[/dim]")
+
+
 def display_cat_conversation(name, conversation, model):
     """Print a saved conversation's messages to the console.
 
@@ -199,6 +214,9 @@ def display_cat_conversation(name, conversation, model):
                 f"{ts_display}{model_display}"
             )
         console.print(escape(msg["content"]))
+        if msg.get("includes"):
+            listed = "; ".join(f"{escape(inc['typed'])}, {_include_size(inc)}" for inc in msg["includes"])
+            console.print(f"[dim]\\[included: {listed}][/dim]")
         console.print()
 
 
@@ -211,6 +229,10 @@ def display_conversation_info(summary, last_stats=None, context_length=None):
     table.add_row("Messages", f"{summary['messages']} ({user} you, {asst} AI)")
     table.add_row("Words", f"{summary['words']:,}")
     table.add_row("Characters", f"{summary['characters']:,}")
+    if summary.get("included_files"):
+        table.add_row(
+            "Included files", f"{summary['included_files']} ({format_size(summary['included_bytes'])})"
+        )
     if last_stats and "prompt_tokens" in last_stats:
         table.add_row("Prompt tokens", f"{last_stats['prompt_tokens']:,}")
     table.add_row("Context window", f"{context_length:,} tokens" if context_length else "unknown")

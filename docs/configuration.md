@@ -23,7 +23,7 @@ current session only.
 | `seed` | int | unset | Sampling seed. Unset means the server's default (random). |
 | `temperature` | float | unset | Unset means the server's default (0.8). |
 | `top_p` | float | unset | Unset means the server's default (0.95). |
-| `read_file_max_kb` | int | `32` | Largest file `/read` and `/system <file>` accept. |
+| `read_file_max_kb` | int | `32` | Largest file `/read`, `@@<path>` and `/system <file>` accept (each file, not the total). |
 
 TOML has no "unset": leave a key out to use the server's default.
 

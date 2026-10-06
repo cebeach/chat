@@ -41,13 +41,13 @@ class Conversation:
         self.messages = []
         self.source_file = None
 
-    def _add(self, role, content, source_file=None, model=None, thinking=None):
+    def _add(self, role, content, includes=None, model=None, thinking=None):
         msg = {
             "role": role,
             "timestamp": datetime.now().isoformat(),
         }
-        if source_file is not None:
-            msg["source_file"] = source_file
+        if includes:
+            msg["includes"] = includes
         if model:
             msg["model"] = model
         if thinking:
@@ -55,8 +55,14 @@ class Conversation:
         msg["content"] = content  # Add content last
         self.messages.append(msg)
 
-    def add_user(self, content, source_file=None):
-        self._add("user", content, source_file=source_file)
+    def add_user(self, content, includes=None):
+        """Add a user message.
+
+        includes lists the files whose text was spliced into content (see
+        build_message in chat.py). It is stored with the message for display
+        and is never sent to the model: get_messages() sends role and content only.
+        """
+        self._add("user", content, includes=includes)
 
     def add_assistant(self, content, model=None, thinking=None):
         """Add an assistant reply.
@@ -73,12 +79,15 @@ class Conversation:
     def summary(self):
         """Return a dict of conversation statistics."""
         all_content = " ".join(m["content"] for m in self.messages)
+        included = [inc for m in self.messages for inc in m.get("includes", [])]
         return {
             "messages": len(self.messages),
             "user_messages": sum(1 for m in self.messages if m["role"] == "user"),
             "assistant_messages": sum(1 for m in self.messages if m["role"] == "assistant"),
             "words": len(all_content.split()) if all_content.strip() else 0,
             "characters": sum(len(m["content"]) for m in self.messages),
+            "included_files": len(included),
+            "included_bytes": sum(inc.get("bytes", 0) for inc in included),
         }
 
     def get_pair(self, pair_index):
@@ -123,7 +132,7 @@ class Conversation:
     def get_messages(self):
         """Return messages list with system prompt prepended if set.
 
-        Only returns 'role' and 'content' fields (not metadata like source_file),
+        Only returns 'role' and 'content' fields (not metadata like includes),
         so the reasoning kept in 'thinking' is never sent back to the model. An
         assistant message with empty content (a reply that was only thinking) is
         left out together with the user message just before it, so no empty
