@@ -34,4 +34,5 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "integration: needs a real llama-server (see docs/testing.md); skipped when no models directory is configured",
+    "llama_args(*flags): llama-server flags merged over the profile's args for this test, e.g. llama_args(\"--ctx-size 2048\") (see docs/testing.md)",
 ]

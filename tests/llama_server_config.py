@@ -12,7 +12,7 @@ import shutil
 import socket
 import tomllib
 from urllib.parse import urlparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -176,6 +176,23 @@ def _merge(default_args, own_args, removed):
     own_names = {_flag_name(tokens) for tokens in own_args}
     kept = [t for t in default_args if _flag_name(t) not in own_names and _flag_name(t) not in removed]
     return kept + own_args
+
+
+def with_extra_args(profile, extra):
+    """The profile with a test's `llama_args` marker flags merged over its args.
+
+    Same rule as a profile over [defaults]: a flag spelled the same way replaces the one
+    already there (--ctx-size 2048 replaces --ctx-size 16384; -c 2048 would not), and the
+    reserved flags are refused. The profile itself is not changed.
+    """
+    if not extra:
+        return profile
+    return replace(profile, args=_merge(profile.args, _parse_flags(list(extra), "llama_args"), set()))
+
+
+def extras_id(extra):
+    """A short test-id suffix for a test's extra flags: ('--ctx-size 2048',) -> 'ctx-size-2048'."""
+    return "+".join("-".join(item.split()).lstrip("-") for item in extra)
 
 
 def _parse_think_tags(value, where):
@@ -389,15 +406,20 @@ def resolve_setup(
     committed_path=COMMITTED_CONFIG,
     local_path=LOCAL_CONFIG,
     template_dir=TEMPLATE_DIR,
+    extra_args=(),
 ):
     """Everything the fixture needs, or NotConfigured (skip) / LlamaTestConfigError (error).
+
+    `extra_args` are a test's `llama_args` flags, merged over the profile's own.
 
     Takes `environ` and the two file paths as arguments so tests can pass a dict and
     files under tmp_path instead of the real machine setup.
     """
     config = load_config(committed_path, template_dir)
     local = load_local(local_path)
-    profile = select_profile(config, cli_model or environ.get("LLAMA_TEST_MODEL"))
+    profile = with_extra_args(
+        select_profile(config, cli_model or environ.get("LLAMA_TEST_MODEL")), extra_args
+    )
 
     binary = _find_binary(local.binary, environ) if local.binary else None
 

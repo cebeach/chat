@@ -35,7 +35,7 @@ Defined in `tests/conftest.py`.
 
 | Fixture | Scope | What you get |
 |---|---|---|
-| `llama_server` | session, one per profile | A llama-server for the profile the test is running against. An object with `.url` (`http://127.0.0.1:8001`), `.port`, `.argv` (the full command line), `.profile` (the profile name) and `.log_dir` |
+| `llama_server` | session, one per profile | A llama-server for the profile the test is running against. An object with `.url` (`http://127.0.0.1:8001`), `.port`, `.argv` (the full command line), `.profile` (the profile name), `.extra_args` (the flags from a `llama_args` marker, else `()`) and `.log_dir` |
 | `llama_client` | function | A new `LlamaClient` pointed at that server, already refreshed from `/props` |
 
 A test marks itself `integration` and asks for the fixture it needs:
@@ -195,6 +195,32 @@ remove = ["--log-prefix"]                 # leave it out entirely
 
 A `remove` entry that matches no default is an error, which catches a typo or an alias
 that would otherwise do nothing.
+
+### Changing flags for one test: `llama_args`
+
+A test that needs the server started differently, for example with a small context window,
+marks itself instead of adding a profile:
+
+```python
+@pytest.mark.integration
+@pytest.mark.llama_args("--ctx-size 2048")        # on a test, or on a class for all its tests
+def test_prompt_over_the_window_is_refused(llama_client):
+    assert llama_client.server_n_ctx == 2048
+```
+
+Each string is one flag written as in `args`, and it is merged over the profile's flags by
+the rule in [Overriding a default](#overriding-a-default): the same spelling replaces the
+profile's flag (`--ctx-size 2048` replaces `--ctx-size 16384`, `-c 2048` would not), a new
+flag is added, and `-m`, `--host` and `--port` are refused. The marker cannot `remove` a
+flag.
+
+- The test ID shows it, for example `test_x[qwen35-2B-Q8_0+ctx-size-2048]`, and
+  `llama_server.extra_args` and `.argv` carry the override.
+- Tests with identical flags share one server. Each distinct set of flags is one more
+  model load per selected profile, after the unmarked tests' server has been stopped, so
+  port 8001 is still used by one server at a time. Use it sparingly, and remember that
+  `--llama-model all` repeats it for every profile.
+- A bad flag fails when the server is needed, as an error naming the cause, never at collection.
 
 To add a profile, add a `[models.<name>]` table with `file` (and, as a record, `source_url`), add any flags it needs under
 `args`, and run it once with `--llama-model <name>` (or add it to a run with `all`).

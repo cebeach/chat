@@ -47,6 +47,11 @@ def pytest_generate_tests(metafunc):
     except cfg.LlamaTestConfigError as exc:
         metafunc.config.stash[CONFIG_ERROR] = exc
         names = [CONFIG_ERROR_ID]
+    extra = tuple(arg for mark in metafunc.definition.iter_markers("llama_args") for arg in mark.args)
+    if extra and names != [CONFIG_ERROR_ID]:
+        # A tuple, so equal extras compare equal and pytest groups those tests on one server.
+        suffix = cfg.extras_id(extra)
+        names = [pytest.param((name, extra), id=f"{name}+{suffix}") for name in names]
     metafunc.parametrize("llama_server", names, indirect=True, scope="session")
 
 
@@ -57,6 +62,7 @@ class LlamaServer:
     argv: list
     profile: str
     log_dir: object
+    extra_args: tuple = ()
 
 
 @pytest.fixture(scope="session")
@@ -64,15 +70,17 @@ def llama_server(request, tmp_path_factory):
     """A llama-server started from tests/llama-server.toml for one profile.
 
     Parametrized by the profile (see pytest_generate_tests): by default only the first
-    profile, or the ones chosen with --llama-model. Skips when no models directory is
-    configured; every other problem is an error that names the cause or points at
+    profile, or the ones chosen with --llama-model. A test marked
+    `@pytest.mark.llama_args("--ctx-size 2048")` gets the profile's server with those flags
+    merged over its args. Skips when no models directory is configured; every other problem is an error that names the cause or points at
     llama-server.log.
     """
-    name = getattr(request, "param", None)
+    param = getattr(request, "param", None)
+    name, extra = param if isinstance(param, tuple) else (param, ())
     if name == CONFIG_ERROR_ID:
         raise request.config.stash[CONFIG_ERROR]
     try:
-        setup = cfg.resolve_setup(name, os.environ)
+        setup = cfg.resolve_setup(name, os.environ, extra_args=extra)
     except cfg.NotConfigured as exc:
         pytest.skip(str(exc))
 
@@ -85,7 +93,7 @@ def llama_server(request, tmp_path_factory):
     url = f"http://{cfg.HOST}:{port}"
     server = start(argv, log_dir, url, setup.startup_timeout)
     request.addfinalizer(lambda: stop(server))
-    return LlamaServer(url, port, argv, setup.profile.name, log_dir)
+    return LlamaServer(url, port, argv, setup.profile.name, log_dir, extra)
 
 
 @pytest.fixture
