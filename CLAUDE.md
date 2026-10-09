@@ -57,11 +57,11 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Seven source f
 
 ### Data flow
 
-User input → `chat.py` REPL → token check (`LlamaClient.check_fit()`, `tokens.fits()`; refuses a prompt that cannot fit) → `Conversation.add_user()` → `LlamaClient.chat()` returns `LlamaChatStream` → `ui.display_assistant_stream()` consumes iterator, shows raw tokens, re-renders as Markdown → `Conversation.add_assistant()`.
+User input → `chat.py` REPL → token check (`LlamaClient.check_fit()`, `tokens.fits()`; refuses a prompt that cannot fit) → `Conversation.add_user()` → `LlamaClient.chat()` returns `LlamaChatStream` → `ui.display_assistant_stream()` consumes iterator, shows raw tokens → `Conversation.add_assistant()`.
 
 ### Key conventions
 
 - Zero external dependencies beyond `requests` and `rich`. New features should use stdlib only. `ruff` and `pytest` are development-only tools (`pytest` is in `requirements-dev.txt`).
 - Config, conversations, and readline history all live under `~/.config/chat/` and `~/.local/share/chat/`.
-- `state` dict in the REPL carries mutable session state (`model`, `config`, `show_stats`, `options`).
+- The `State` dataclass (`chat.py`) carries mutable session state (`model`, `config`, `context_length`, `options`, `show_stats`, `think_tags`, …).
 - Model options (`seed`, `temperature`, `top_p`) use `None` to mean "use llama-server default"; `None` values are filtered out before sending to the API.
