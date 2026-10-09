@@ -25,7 +25,7 @@ def tokens():
         hold("token")
 
 
-ui.init_readline(tempfile.mkdtemp())
+ui.init_readline(lambda d=tempfile.mkdtemp(): d)
 with ui.echo_suppressed():
     ui.display_assistant_stream(tokens())
 print("DONE", flush=True)

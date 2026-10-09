@@ -46,6 +46,7 @@ The conversation was also auto-saved, so even without `/save` it can be found wi
 | look up a command | [Command reference](commands.md) |
 | type multi-line text, use history and Tab, send files | [Entering text](input.md) |
 | set a system prompt, save, load or convert conversations | [Conversations](conversations.md) |
+| keep standing notes and a system prompt for a long piece of work | [Projects](projects.md) |
 | learn why only instruction-tuned models work | [Choosing a model](models.md) |
 | change the server URL, defaults, or what gets saved | [Configuration](configuration.md) |
 | understand the stats line, the context check and the warning | [Statistics](statistics.md) |

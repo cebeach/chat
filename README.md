@@ -25,6 +25,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 - **Save/load conversations** — JSON files with tab-completed names; auto-saved after every reply and on exit
 - **Thinking blocks** — kept in saved files by default, separate from the answer; `save_thinking = false` or `/config save_thinking [on|off]` omits them. Tags are detected from the server per model; details in [docs/thinking-tags.md](docs/thinking-tags.md)
 - **Files** — `@@<path>` puts a text file's contents inside a message, wherever you write it; `/read <path> ...` sends text files as a message; `/system <file>` loads a system prompt from a file in the current directory (a prompt that cannot fit the context window is refused before it is sent)
+- **Projects** — a named directory with its own conversations, a `system.md` prompt and a `project.md` of standing notes sent with every prompt; `/project`, `--project`, and `/remember` to have the model merge a note into the file (shown as a diff, written only on `y`); see [docs/projects.md](docs/projects.md)
 - **Recall and retry** — `/recall <n>` re-injects an older exchange; `/retry` regenerates the last reply
 - **Context check** — every prompt is counted exactly by the server before it is sent: one that cannot fit the window is refused (nothing is lost), one over 80% warns; `/info` breaks the prompt down by system prompt, your messages and replies (`context_check`, `reserve_output_tokens`)
 - **Stats** — tokens/sec, generated and prompt tokens after each reply (`/stats` toggles), and `/info`
@@ -35,7 +36,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 ## Documentation
 
 See the [user guide](docs/user-guide.md): [commands](docs/commands.md),
-[entering text](docs/input.md), [conversations](docs/conversations.md),
+[entering text](docs/input.md), [conversations](docs/conversations.md), [projects](docs/projects.md),
 [choosing a model](docs/models.md), [configuration](docs/configuration.md), [statistics](docs/statistics.md),
 [troubleshooting](docs/troubleshooting.md).
 

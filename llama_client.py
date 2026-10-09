@@ -225,6 +225,19 @@ class LlamaClient:
             return None
         return params if isinstance(params, dict) else None
 
+    def complete(self, model, messages, options=None, refreshed=False):
+        """Run one chat request to the end and return (text, cut_off, think_tags); nothing is displayed.
+
+        cut_off is True when the reply did not finish: the context window filled or a
+        token limit stopped it. A stream interrupted before the server's final chunk
+        also counts, because the text is then incomplete. The text includes any
+        thinking, which the caller strips with think_tags (the pair used, or None). Raises what chat() raises.
+        """
+        stream = self.chat(model, messages, options=options, refreshed=refreshed)
+        text = "".join(stream)
+        finished = bool(stream.stats)
+        return text, stream.truncated or stream.limited or not finished, stream.think_tags
+
     def detect_think_tags(self):
         """Return the active thinking tags as (start, end, source), or None.
 
@@ -374,6 +387,8 @@ class LlamaChatStream:
         self._prefix = prefix
         self.stats = {}
         self.truncated = False
+        # True when the server stopped the reply at a token limit (stop_type "limit").
+        self.limited = False
         self.think_tags = None
         self.server_model = None
         self.server_n_ctx = None
@@ -400,6 +415,7 @@ class LlamaChatStream:
             if data.get("stop"):
                 self.model = data.get("model")
                 self.truncated = data.get("truncated") is True
+                self.limited = data.get("stop_type") == "limit"
                 self._build_stats(data)
                 return
 

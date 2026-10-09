@@ -11,6 +11,9 @@ stats line only; they are never added to the prompt figure. See docs/statistics.
 # A prompt above this share of the window gets a warning before it is sent.
 WARN_SHARE = 0.8
 
+# Project notes above this share of the window leave little room for the conversation.
+NOTES_WARN_SHARE = 0.25
+
 
 def fits(needed, n_ctx, reserve=0):
     """True when a prompt of `needed` tokens, plus `reserve` tokens kept for the reply, fits.
@@ -26,11 +29,17 @@ def near_limit(needed, n_ctx):
     return bool(n_ctx) and needed > WARN_SHARE * n_ctx
 
 
+def notes_heavy(notes_tokens, n_ctx):
+    """True when the project notes take more than a quarter of the window."""
+    return bool(n_ctx) and notes_tokens > NOTES_WARN_SHARE * n_ctx
+
+
 def breakdown(client, conversation, model=None):
     """Where the next prompt's tokens go, or None for an empty conversation.
 
-    Returns a dict: system, user and assistant (each counted on its own, without the
-    special tokens a whole prompt starts with), total (the exact prompt, as chat() would
+    Returns a dict: system (the system prompt), notes (the project notes), user and
+    assistant (each counted on its own, without the special tokens a whole prompt starts
+    with), total (the exact prompt, as chat() would
     send it), overhead (what is left: the template's markup, joins and the opening of
     the reply, never below 0) and n_ctx (None if the server did not report one).
     Raises requests exceptions when the server cannot be reached.
@@ -40,16 +49,20 @@ def breakdown(client, conversation, model=None):
         return None
     total, n_ctx = client.check_fit(messages, model=model)
 
-    def count(role):
-        text = "\n".join(m["content"] for m in messages if m["role"] == role)
+    def count(text):
         return client.count_tokens(text, add_special=False) if text else 0
 
-    system, user, assistant = count("system"), count("user"), count("assistant")
+    def by_role(role):
+        return count("\n".join(m["content"] for m in messages if m["role"] == role))
+
+    system, notes = count(conversation.system_prompt), count(conversation.project_notes)
+    user, assistant = by_role("user"), by_role("assistant")
     return {
         "system": system,
+        "notes": notes,
         "user": user,
         "assistant": assistant,
-        "overhead": max(0, total - system - user - assistant),
+        "overhead": max(0, total - system - notes - user - assistant),
         "total": total,
         "n_ctx": n_ctx,
     }

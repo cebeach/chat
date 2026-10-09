@@ -18,7 +18,9 @@ not implemented and answers `Unknown command`; use `/?`.
 | [`/info`](#info) | Conversation and context-window statistics |
 | [`/load <name>`](#load-name) | Replace the current conversation with a saved one |
 | [`/read <path> ...`](#read-path-) | Send one or more text files as a message |
+| [`/project [subcommand]`](#project) | Show, list, create, switch or reload projects |
 | [`/recall <n>`](#recall-n) | Re-inject an earlier exchange |
+| [`/remember <text>`](#remember-text) | Merge a note into the project's `project.md` |
 | [`/retry`](#retry) | Regenerate the last reply |
 | [`/save [name]`](#save-name) | Save the conversation |
 | [`/set [key [value]]`](#set) | View or change model options |
@@ -61,13 +63,13 @@ Auto-saves (if `auto_save` is on) and quits. Ctrl-D does the same.
 ## /info
 Shows message count (you and AI), words, characters, the context window size and, once
 there is a message, the tokens the next prompt would carry, split into system prompt,
-your messages, the AI's replies and template overhead, with the share of the window.
+project notes (when a project has any), your messages, the AI's replies and template overhead, with the share of the window.
 The counts come from the server each time, so `/info` needs it to be running. See
 [Statistics](statistics.md#info).
 
 ## /load <name>
 Replaces the current messages and system prompt with the saved conversation
-`<name>`. The model recorded in the file is shown for information only. Your
+`<name>` (in a project, the project's system prompt stays; see [Projects](projects.md)). The model recorded in the file is shown for information only. Your
 session keeps talking to whatever model the server is running.
 
 Note that auto-save keeps writing to this session's own `auto_<timestamp>` file,
@@ -85,10 +87,30 @@ files are recorded in the saved conversation as `includes`, shown by `/cat` and 
 To put a file in the middle of a longer message, use `@@<path>` instead; see
 [input](input.md#sending-files).
 
+## /project
+A project holds its own conversations, system prompt and standing notes; see
+[Projects](projects.md).
+
+| Form | What it does |
+|---|---|
+| `/project` or `/project info` | The active project, its directory, the size of its notes and any overridden settings |
+| `/project list` | The projects, newest first, the active one marked |
+| `/project new <name>` | Create a project (name: ASCII letters, digits, `-`, `_`) |
+| `/project use <name>` | Switch to it: save the current conversation, start an empty one |
+| `/project reload` | Re-read `system.md`, `project.md` and `project.toml`; the conversation stays |
+| `/project leave` | Back to no project: the global settings, prompt and directory |
+
+A switch resets `/set`, `/config` and `/stats` to the configured values. Tab completes
+the subcommands and project names.
+
 ## /recall <n>
 Copies the n-th question-and-answer pair (counting from 1) to the end of the
 conversation, with a note that it is recalled. Use it to bring an old exchange back
 into the model's context window. `Pair n out of range (1-N)` if there is no such pair.
+
+## /remember <text>
+Asks the model to merge `<text>` into the project's `project.md` and shows the result as a
+diff. Only `y` writes it. Needs a project; see [Projects](projects.md#remember).
 
 ## /retry
 Removes the last reply (including one you interrupted with Ctrl-C) and sends your

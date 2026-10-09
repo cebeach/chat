@@ -4,8 +4,9 @@ Settings come from `~/.config/chat/config.toml`. The file is optional; a missing
 or key falls back to the default. Unknown keys are ignored. Order of precedence:
 
 1. `--url` on the command line (only for the server URL)
-2. `config.toml`
-3. built-in default
+2. the active [project's](projects.md) `project.toml` (only the sampling options, `context_check` and `reserve_output_tokens`)
+3. `config.toml`
+4. built-in default
 
 Changes made inside the app with [`/set` and `/config`](commands.md) last for the
 current session only.
@@ -17,6 +18,7 @@ current session only.
 | `llama_url` | string | `http://127.0.0.1:8001` | Where llama-server listens. |
 | `system_prompt` | string | `""` | System prompt for new sessions. |
 | `conversations_dir` | string | `~/.local/share/chat/conversations` | Where `/save`, auto-save and `/load` look. |
+| `projects_dir` | string | `~/.local/share/chat/projects` | Where [projects](projects.md) live. |
 | `auto_save` | bool | `true` | Save after each reply and on exit. |
 | `save_thinking` | bool | `true` | Keep the model's reasoning (the `thinking` field) in saved files. |
 | `think_start`, `think_end` | string | `""` | Override the detected thinking tags. Both must be set. |
@@ -55,6 +57,7 @@ reserve_output_tokens = 1000
 ```bash
 python chat.py                          # use config.toml or defaults
 python chat.py --url http://host:8001   # another llama-server
+python chat.py --project novel          # start in a project
 ```
 
 ## Files the app uses
@@ -63,4 +66,5 @@ python chat.py --url http://host:8001   # another llama-server
 |---|---|
 | `~/.config/chat/config.toml` | settings (you create it) |
 | `~/.local/share/chat/conversations/` | saved conversations (`*.json`) |
+| `~/.local/share/chat/projects/<name>/` | a project: `project.md`, `system.md`, `project.toml`, `conversations/` |
 | `~/.local/share/chat/history` | input history, last 1000 lines |

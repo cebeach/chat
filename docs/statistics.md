@@ -152,6 +152,7 @@ Messages               8 (4 you, 4 AI)
 Words                  1,204
 Characters             7,318
 Tokens: system prompt  40
+Tokens: project notes  120
 Tokens: your messages  610
 Tokens: AI replies     820
 Tokens: template ≈     60
@@ -160,7 +161,9 @@ Context window         8,192 tokens
 Window used            18.7%
 ```
 
-`Messages`, `Words` and `Characters` cover the current conversation. The token rows
+`Tokens: project notes` appears only with a [project](projects.md) whose `project.md` is
+not empty; it is counted apart from the system prompt, and a warning follows when the notes
+take more than a quarter of the window. `Messages`, `Words` and `Characters` cover the current conversation. The token rows
 are what the next prompt would carry (before you type anything), counted by the server
 when you run `/info`; thinking is not included. The `template` row is the rest, an
 approximation: the chat template's markup and separators. The rows are left out for an
