@@ -41,13 +41,14 @@ Tests marked `integration` start a real llama-server (profiles in `tests/llama-s
 
 ## Architecture
 
-Air-gapped terminal chat app talking to a local llama.cpp server. Six source files, no package structure:
+Air-gapped terminal chat app talking to a local llama.cpp server. Seven source files, no package structure:
 
 - **`chat.py`** — Entry point. Parses args, runs the REPL loop, dispatches slash commands via `handle_command()`.
 - **`config.py`** — Loads `~/.config/chat/config.toml` (stdlib `tomllib`), merges with `DEFAULTS` dict.
-- **`llama_client.py`** — `LlamaClient` wraps the llama-server native API (`/health`, `/props`, `/apply-template`, `/completion`). The model and its context length are read from `/props` before every turn (`refresh()`), never chosen by the client. `LlamaChatStream` is an iterable that yields tokens (SSE) and exposes `.stats` after iteration. Thinking tags are detected from the server per model (`find_think_tags()`, `LlamaClient.detect_think_tags()`); read `docs/thinking-tags.md` before changing that.
+- **`llama_client.py`** — `LlamaClient` wraps the llama-server native API (`/health`, `/props`, `/apply-template`, `/tokenize`, `/completion`). The model and its context length are read from `/props` before every turn (`refresh()`), never chosen by the client. `LlamaChatStream` is an iterable that yields tokens (SSE) and exposes `.stats` after iteration. Thinking tags are detected from the server per model (`find_think_tags()`, `LlamaClient.detect_think_tags()`); read `docs/thinking-tags.md` before changing that.
 - **`conversation.py`** — `Conversation` holds message history with timestamps. Handles save/load to JSON files in `~/.local/share/chat/conversations/`, pair recall, and system prompt.
 - **`ui.py`** — All terminal I/O via Rich. Streaming display writes raw tokens with word-wrap (it does not re-render as Markdown). The prompt is a plain `>>> ` read by readline (`get_user_input()`); `echo_suppressed()` keeps the tty from echoing keys typed during a model turn and must never be held across `input()` (readline entered with ECHO off draws nothing). Readline integration for input history and tab-completion of commands and conversation names.
+- **`tokens.py`** — Token accounting against the context window: `fits`, `near_limit`, the `/info` `breakdown`. Pure logic over `LlamaClient.count_tokens` / `prompt_tokens` / `check_fit` (`/tokenize` and `/apply-template`); `chat.py` runs the check before every send and `/system`.
 - **`conv2txt.py`** — Standalone CLI utility to convert saved conversation JSON to plain text.
 
 ### Documentation
@@ -56,11 +57,11 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Six source fil
 
 ### Data flow
 
-User input → `chat.py` REPL → `Conversation.add_user()` → `LlamaClient.chat()` returns `LlamaChatStream` → `ui.display_assistant_stream()` consumes iterator, shows raw tokens, re-renders as Markdown → `Conversation.add_assistant()`.
+User input → `chat.py` REPL → token check (`LlamaClient.check_fit()`, `tokens.fits()`; refuses a prompt that cannot fit) → `Conversation.add_user()` → `LlamaClient.chat()` returns `LlamaChatStream` → `ui.display_assistant_stream()` consumes iterator, shows raw tokens, re-renders as Markdown → `Conversation.add_assistant()`.
 
 ### Key conventions
 
 - Zero external dependencies beyond `requests` and `rich`. New features should use stdlib only. `ruff` and `pytest` are development-only tools (`pytest` is in `requirements-dev.txt`).
 - Config, conversations, and readline history all live under `~/.config/chat/` and `~/.local/share/chat/`.
-- `state` dict in the REPL carries mutable session state (`model`, `config`, `show_stats`, `options`, `last_stats`).
+- `state` dict in the REPL carries mutable session state (`model`, `config`, `show_stats`, `options`).
 - Model options (`seed`, `temperature`, `top_p`) use `None` to mean "use llama-server default"; `None` values are filtered out before sending to the API.

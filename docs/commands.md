@@ -12,7 +12,7 @@ not implemented and answers `Unknown command`; use `/?`.
 | `/?` | Show the command table |
 | [`/cat <name>`](#cat-name) | Print a saved conversation |
 | [`/clear`](#clear) | Empty the current conversation |
-| [`/config`](#config) | Show settings; toggle `save_thinking` |
+| [`/config`](#config) | Show settings; toggle `save_thinking` and `context_check` |
 | [`/conversations`](#conversations) | List saved conversations |
 | [`/exit`](#exit) | Save and quit |
 | [`/info`](#info) | Conversation and context-window statistics |
@@ -46,9 +46,10 @@ The next auto-save is skipped until there is at least one message again.
 server first, so the model name is current.
 
 `/config save_thinking on|off` sets whether saved files keep the model's reasoning (the `thinking` field of each reply).
-`/config save_thinking` with no argument toggles it. This is the only setting
-`/config` can change, and the change lasts for the current session only. Put
-`save_thinking = false` in [the config file](configuration.md) to make it permanent.
+`/config save_thinking` with no argument toggles it. `/config context_check on|off` does the same for the
+[pre-send token check](statistics.md#the-pre-send-check). These are the only settings
+`/config` can change, and a change lasts for the current session only. Put
+`save_thinking = false` or `context_check = false` in [the config file](configuration.md) to make it permanent.
 See [thinking-tags.md](thinking-tags.md) for how tags are detected.
 
 ## /conversations
@@ -58,15 +59,16 @@ Lists saved conversations, newest first, with their file paths.
 Auto-saves (if `auto_save` is on) and quits. Ctrl-D does the same.
 
 ## /info
-Shows message count (you and AI), words, characters, the context window size, and,
-after at least one reply, the last turn's prompt tokens, context used and
-percentage. See [Statistics](statistics.md).
+Shows message count (you and AI), words, characters, the context window size and, once
+there is a message, the tokens the next prompt would carry, split into system prompt,
+your messages, the AI's replies and template overhead, with the share of the window.
+The counts come from the server each time, so `/info` needs it to be running. See
+[Statistics](statistics.md#info).
 
 ## /load <name>
 Replaces the current messages and system prompt with the saved conversation
 `<name>`. The model recorded in the file is shown for information only. Your
-session keeps talking to whatever model the server is running. Token stats
-from before the load are discarded.
+session keeps talking to whatever model the server is running.
 
 Note that auto-save keeps writing to this session's own `auto_<timestamp>` file,
 not to the file you loaded. Use `/save <name>` to write changes back.
@@ -77,7 +79,8 @@ your next message. Quote paths that contain spaces: `/read "my notes.txt" other.
 `~` is expanded and relative paths are relative to where you started the app.
 Files are joined the way `@@<path>` includes are: a blank line between them, and each
 file's leading and trailing newlines dropped. A file that is missing, unreadable, or
-larger than `read_file_max_kb` (default 32) is reported by name and nothing is sent. The
+over 8 MB is reported by name and nothing is sent, and so is a message whose
+prompt would not fit the context window (see [statistics](statistics.md#the-pre-send-check)). The
 files are recorded in the saved conversation as `includes`, shown by `/cat` and `/info`.
 To put a file in the middle of a longer message, use `@@<path>` instead; see
 [input](input.md#sending-files).
@@ -115,8 +118,10 @@ Turns the dim stats line printed after each reply on or off. It starts on.
 - `/system <text>` sets it to the text.
 - `/system """` opens multiline input for a long prompt.
 - `/system <path>` reads the prompt from a file, but only if the file is inside the
-  directory you started the app from (or below it) and is no larger than
-  `read_file_max_kb`. Any other value, including a path outside that directory, is
-  used as the literal prompt text.
+  directory you started the app from (or below it). Any other value, including a path
+  outside that directory, is used as the literal prompt text.
+
+A new system prompt that, with the conversation so far, would not fit the context window
+is refused and the old one stays (see [statistics](statistics.md#the-pre-send-check)).
 
 The system prompt is saved with the conversation.

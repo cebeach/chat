@@ -9,11 +9,12 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from requests.exceptions import ConnectionError, HTTPError
+from requests.exceptions import ConnectionError, HTTPError, RequestException
 from rich.markup import escape
 
 from config import load_config
 from conversation import Conversation, split_think
+import tokens
 from llama_client import LlamaClient, ThinkTagsError
 from ui import (
     console,
@@ -28,6 +29,7 @@ from ui import (
     display_included_files,
     display_info,
     display_options,
+    display_prompt_size,
     display_stats,
     echo_suppressed,
     get_multiline_input,
@@ -46,7 +48,6 @@ class State:
     context_length: int | None
     options: dict = field(default_factory=dict)
     show_stats: bool = True
-    last_stats: dict = field(default_factory=dict)
     retry_text: str | None = None
     auto_save_name: str = ""
     pending_includes: list = field(default_factory=list)
@@ -67,8 +68,13 @@ def parse_args():
 _OPTION_KEYS = {"seed": int, "temperature": float, "top_p": float}
 
 
-def _read_file(path: str, config: dict) -> tuple[bool, str]:
-    """Read a UTF‑8 text file with size limit.
+# Bounds the memory a read and the /tokenize request body can take. It is not the
+# context limit: whether a prompt fits the window is decided by _fits_window().
+_READ_FILE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _read_file(path: str) -> tuple[bool, str]:
+    """Read a UTF‑8 text file of at most 8 MB.
 
     Returns (True, content) on success or (False, error_msg) on failure.
     """
@@ -77,10 +83,8 @@ def _read_file(path: str, config: dict) -> tuple[bool, str]:
     if not resolved.is_file():
         return False, "File not found."
 
-    # Enforce size limit from config
-    limit_kb = config.get("read_file_max_kb", 32)
-    if resolved.stat().st_size > limit_kb * 1024:
-        return False, f"File too large ({limit_kb} KB max)."
+    if resolved.stat().st_size > _READ_FILE_MAX_BYTES:
+        return False, "File too large to read."
 
     try:
         content = resolved.read_text(encoding="utf-8")
@@ -102,7 +106,7 @@ def _leading_newlines(s):
     return len(s) - len(s.lstrip("\n"))
 
 
-def build_message(segments, config):
+def build_message(segments):
     """Read the files in segments and splice them into one flat message.
 
     segments is a list of ("text", str) and ("file", typed_path, shown_name)
@@ -121,7 +125,7 @@ def build_message(segments, config):
         if seg[0] != "file":
             continue
         _, typed, shown = seg
-        ok, content = _read_file(typed, config)
+        ok, content = _read_file(typed)
         if not ok:
             errors.append(f"{shown}: {content}")
             continue
@@ -169,7 +173,7 @@ def build_message(segments, config):
     return out, includes, []
 
 
-def expand_includes(text, config):
+def expand_includes(text):
     """Replace each `@@<path>` in text with the file's contents.
 
     Returns (flat_text, includes, errors); see build_message. The model gets
@@ -208,18 +212,18 @@ def expand_includes(text, config):
     segments.append(("text", "".join(literal)))
     if errors:
         # Still report any missing files, so one fix pass finds everything.
-        _, _, more = build_message(segments, config)
+        _, _, more = build_message(segments)
         return "", [], errors + [e for e in more if not e.startswith("Nothing to send")]
-    return build_message(segments, config)
+    return build_message(segments)
 
 
-def _prepare_user_message(text, state):
+def _prepare_user_message(text):
     """Expand `@@<path>` includes in a typed message.
 
     Returns (flat_text, includes), or None when the message must not be sent:
     the errors are printed and nothing reaches the conversation or the model.
     """
-    flat, includes, errors = expand_includes(text, state.config)
+    flat, includes, errors = expand_includes(text)
     if errors:
         for error in errors:
             display_error(escape(error))
@@ -252,7 +256,7 @@ def _handle_set(args, state):
 
 
 # Boolean settings that /config can toggle for the session, with their defaults.
-_CONFIG_TOGGLES = {"save_thinking": True}
+_CONFIG_TOGGLES = {"save_thinking": True, "context_check": True}
 
 
 def _handle_config(args, state, client=None):
@@ -351,9 +355,50 @@ def _think_end(state):
     return state.think_tags[1] if state.think_tags else None
 
 
-def _near_context_limit(used_tokens, context_length):
-    """True when used_tokens (prompt + generated) exceed 80% of the context window."""
-    return bool(context_length) and used_tokens > 0.8 * context_length
+def _fits_window(client, messages, state, outcome="Not sent"):
+    """Price `messages` against the context window before anything is sent.
+
+    Returns (ok, priced). ok is False only when the prompt cannot fit (the error is
+    printed) or Ctrl-C cancelled the counting; the caller must not send. A prompt over 80% of the window is allowed with
+    a warning. priced is (needed, n_ctx), or None when nothing was counted: context_check
+    is off, the window is unknown, or the server could not be asked. In that last case
+    nothing is refused here, because the call that follows meets the same problem and
+    reports it (and, in chat.py's turn, takes the unanswered message back).
+    """
+    if not state.config.get("context_check", True):
+        return True, None
+    try:
+        needed, n_ctx = client.check_fit(messages, model=state.model)
+    except KeyboardInterrupt:
+        console.print()
+        display_info("Cancelled.")
+        return False, None
+    except (RequestException, ValueError, KeyError):
+        return True, None
+    if not n_ctx:
+        return True, None
+    reserve = state.config.get("reserve_output_tokens", 0)
+    if not tokens.fits(needed, n_ctx, reserve):
+        display_error(tokens.refusal(needed, n_ctx, reserve, outcome))
+        return False, (needed, n_ctx)
+    if tokens.near_limit(needed, n_ctx):
+        display_context_warning(needed, n_ctx)
+    return True, (needed, n_ctx)
+
+
+def _system_prompt_fits(text, client, conversation, state):
+    """True when `text` as the system prompt, with the stored messages, fits the window.
+
+    Runs with the keyboard echo off like a model turn, because counting a large prompt
+    takes a moment. When it does not fit the error is printed and the old prompt stays.
+    """
+    if not text.strip():
+        return True
+    candidate = [{"role": "system", "content": text}]
+    candidate += [m for m in conversation.get_messages() if m["role"] != "system"]
+    with echo_suppressed():
+        ok, _ = _fits_window(client, candidate, state, outcome="System prompt not changed")
+    return ok
 
 
 def handle_command(cmd, args, client, conversation, state):
@@ -368,7 +413,6 @@ def handle_command(cmd, args, client, conversation, state):
 
     elif cmd == "/clear":
         conversation.clear()
-        state.last_stats = {}
         display_info("Conversation cleared.")
 
     elif cmd == "/system":
@@ -377,7 +421,7 @@ def handle_command(cmd, args, client, conversation, state):
             display_info(f"Current system prompt: {current}")
         elif args.strip() == '"""':
             text = get_multiline_input()
-            if text is not None:
+            if text is not None and _system_prompt_fits(text, client, conversation, state):
                 conversation.system_prompt = text
                 display_info("System prompt set.")
         else:
@@ -404,14 +448,14 @@ def handle_command(cmd, args, client, conversation, state):
                 except Exception:
                     in_cwd = False
             if in_cwd and resolved_path.is_file():
-                ok, result = _read_file(str(resolved_path), state.config)
-                if ok:
+                ok, result = _read_file(str(resolved_path))
+                if not ok:
+                    display_error(result)
+                elif _system_prompt_fits(result, client, conversation, state):
                     conversation.system_prompt = result
                     conversation.source_file = str(resolved_path)
                     display_info("System prompt set from file.")
-                else:
-                    display_error(result)
-            else:
+            elif _system_prompt_fits(args, client, conversation, state):
                 # Treat as plain string prompt
                 conversation.system_prompt = args
                 conversation.source_file = None
@@ -446,8 +490,6 @@ def handle_command(cmd, args, client, conversation, state):
                 conversation.system_prompt = loaded_conv.system_prompt
                 # Where that system prompt came from (None clears a stale value).
                 conversation.source_file = loaded_conv.source_file
-                # Token counts from the previous conversation no longer apply.
-                state.last_stats = {}
                 saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
                 display_info(
                     f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
@@ -511,7 +553,6 @@ def handle_command(cmd, args, client, conversation, state):
             # The text is already flat; carry the files it came from, do not re-expand.
             state.pending_includes = conversation.messages[-1].get("includes", [])
             conversation.messages.pop()  # remove user (REPL will re-add)
-            state.last_stats = {}
 
     elif cmd == "/read":
         if not args:
@@ -525,7 +566,7 @@ def handle_command(cmd, args, client, conversation, state):
             return True
         # Same splice rule and failure behaviour as @@<path>: any problem file aborts.
         segments = [("file", name, name) for name in filenames]
-        combined, includes, errors = build_message(segments, state.config)
+        combined, includes, errors = build_message(segments)
         if errors:
             for error in errors:
                 display_error(escape(error))
@@ -540,7 +581,11 @@ def handle_command(cmd, args, client, conversation, state):
         _handle_config(args, state, client)
 
     elif cmd == "/info":
-        display_conversation_info(conversation.summary(), state.last_stats, state.context_length)
+        try:
+            counts = tokens.breakdown(client, conversation, model=state.model)
+        except (RequestException, ValueError, KeyError):
+            counts = None  # the server could not be asked; the rest of the table still shows
+        display_conversation_info(conversation.summary(), counts, state.context_length)
 
     else:
         display_error(f"Unknown command: {cmd}. Type /? for available commands.")
@@ -625,6 +670,7 @@ def main():
                     continue
 
             # Handle commands
+            history = list(conversation.messages)  # what /retry may take away, if the send is refused
             if text.startswith("/"):
                 parts = text.split(None, 1)
                 cmd = parts[0].lower()
@@ -632,51 +678,48 @@ def main():
                 if not handle_command(cmd, cmd_args, client, conversation, state):
                     break
                 # Check if /retry or /read set text to re-send
-                if state.retry_text is not None:
-                    text = state.retry_text
-                    state.retry_text = None
-                    # /read and /retry hand over the files the text came from
-                    conversation.add_user(text, includes=state.pending_includes)
-                    state.pending_includes = []
-                else:
+                if state.retry_text is None:
                     # Commands don't become messages
                     continue
-                # Message already added above, skip to chat()
-                send_to_model = True
+                text = state.retry_text
+                state.retry_text = None
+                # /read and /retry hand over the files the text came from
+                includes, state.pending_includes = state.pending_includes, []
             else:
                 # Not a command: splice in any @@<path> files. A bad include aborts the send,
                 # so nothing is added to the conversation and the model never sees the text.
-                prepared = _prepare_user_message(text, state)
+                prepared = _prepare_user_message(text)
                 if prepared is None:
                     continue
                 text, includes = prepared
-                conversation.add_user(text, includes=includes)
-                send_to_model = True
 
-            # Echo is off for the whole turn (request, reply, stats, autosave) and comes back
-            # just before the next prompt: readline entered with ECHO off draws nothing.
+            # Echo is off for the whole turn (check, request, reply, stats, autosave) and comes
+            # back just before the next prompt: readline entered with ECHO off draws nothing.
             with echo_suppressed():
-                if send_to_model:
+                # The message joins the conversation only once its prompt is known to fit.
+                candidate = conversation.get_messages() + [{"role": "user", "content": text}]
+                fits, priced = _fits_window(client, candidate, state)
+                if not fits:
+                    conversation.messages[:] = history  # a refused /retry loses nothing
+                else:
+                    if priced and includes:
+                        display_prompt_size(*priced)
+                    conversation.add_user(text, includes=includes)
                     try:
                         chat_stream = client.chat(
                             model=state.model,
                             messages=conversation.get_messages(),
                             options=state.options,
+                            refreshed=priced is not None,
                         )
-                        # Before the reply is shown and before any autosave and context
-                        # warning, so they already know this model, its context length
-                        # and its tags.
+                        # Before the reply is shown and before any autosave, so they already
+                        # know this model, its context length and its tags.
                         _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
                         _update_think_tags(state, chat_stream.think_tags)
                         response = display_assistant_stream(chat_stream, think_end=_think_end(state))
                         _store_reply(conversation, response, chat_stream, state)
-                        state.last_stats = chat_stream.stats
                         if state.show_stats:
-                            display_stats(chat_stream.stats, state.context_length)
-                        # Context window warning
-                        used_tokens = chat_stream.stats.get("context_tokens", 0)
-                        if _near_context_limit(used_tokens, state.context_length):
-                            display_context_warning(used_tokens, state.context_length)
+                            display_stats(chat_stream.stats)
                         _auto_save(conversation, state)
                     except KeyboardInterrupt:
                         console.print()

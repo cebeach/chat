@@ -23,7 +23,8 @@ current session only.
 | `seed` | int | unset | Sampling seed. Unset means the server's default (random). |
 | `temperature` | float | unset | Unset means the server's default (0.8). |
 | `top_p` | float | unset | Unset means the server's default (0.95). |
-| `read_file_max_kb` | int | `32` | Largest file `/read`, `@@<path>` and `/system <file>` accept (each file, not the total). |
+| `context_check` | bool | `true` | Count every prompt with the server before sending and refuse one that cannot fit the context window; warn above 80%. `/config context_check on\|off` changes it for the session. Off means no counting, no refusal and no warning. See [statistics](statistics.md#the-pre-send-check). |
+| `reserve_output_tokens` | int | `0` | Tokens kept free for the reply when deciding whether a prompt fits. It guarantees nothing: the reply length is unbounded unless you set `n_predict` on the server, and a thinking model's is hard to predict. Try a few hundred to a few thousand for a thinking model. |
 
 TOML has no "unset": leave a key out to use the server's default.
 
@@ -40,7 +41,7 @@ system_prompt = "You are a concise assistant."
 auto_save = true
 save_thinking = false
 temperature = 0.3
-read_file_max_kb = 64
+reserve_output_tokens = 1000
 ```
 
 ## Command line

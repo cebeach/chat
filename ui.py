@@ -220,7 +220,8 @@ def display_cat_conversation(name, conversation, model):
         console.print()
 
 
-def display_conversation_info(summary, last_stats=None, context_length=None):
+def display_conversation_info(summary, counts=None, context_length=None):
+    """The /info table. `counts` is tokens.breakdown()'s dict (None: not available)."""
     table = Table(title="Conversation Info", show_header=True, header_style="bold")
     table.add_column("Statistic", style="bold cyan")
     table.add_column("Value")
@@ -233,14 +234,16 @@ def display_conversation_info(summary, last_stats=None, context_length=None):
         table.add_row(
             "Included files", f"{summary['included_files']} ({format_size(summary['included_bytes'])})"
         )
-    if last_stats and "prompt_tokens" in last_stats:
-        table.add_row("Prompt tokens", f"{last_stats['prompt_tokens']:,}")
+    if counts:
+        context_length = counts.get("n_ctx") or context_length
+        table.add_row("Tokens: system prompt", f"{counts['system']:,}")
+        table.add_row("Tokens: your messages", f"{counts['user']:,}")
+        table.add_row("Tokens: AI replies", f"{counts['assistant']:,}")
+        table.add_row("Tokens: template ≈", f"{counts['overhead']:,}")
+        table.add_row("Prompt tokens", f"{counts['total']:,}")
     table.add_row("Context window", f"{context_length:,} tokens" if context_length else "unknown")
-    if last_stats and "context_tokens" in last_stats:
-        used = last_stats["context_tokens"]
-        table.add_row("Context used", f"{used:,} tokens")
-        if context_length:
-            table.add_row("Context usage", f"{used / context_length * 100:.1f}%")
+    if counts and context_length:
+        table.add_row("Window used", f"{counts['total'] / context_length * 100:.1f}%")
     console.print(table)
 
 
@@ -380,20 +383,28 @@ def display_context_warning(used, limit):
     console.print(f"[warning]Warning: context window {pct:.0f}% full ({used:,} / {limit:,} tokens)[/warning]")
 
 
-def display_stats(stats, context_length=None):
-    """Display token generation stats, and context usage when known, in a dim line."""
+def display_prompt_size(needed, n_ctx):
+    """A dim line with the size of the prompt about to be sent, after a file was included."""
+    console.print(
+        f"[dim]Prompt: {needed:,} tokens ({needed / n_ctx * 100:.0f}% of the {n_ctx:,}-token window)[/dim]"
+    )
+
+
+def display_stats(stats):
+    """Display token generation stats in a dim line.
+
+    "generated" is everything the model produced, thinking and answer alike; the prompt
+    figure is the server's count for this request. See docs/statistics.md.
+    """
     if not stats:
         return
     parts = []
     if "completion_tokens" in stats:
-        parts.append(f"{stats['completion_tokens']} tokens")
+        parts.append(f"{stats['completion_tokens']} generated (thinking + answer)")
     if "tokens_per_second" in stats:
         parts.append(f"{stats['tokens_per_second']:.1f} tok/s")
     if "prompt_tokens" in stats:
         parts.append(f"{stats['prompt_tokens']} prompt tokens")
-    if context_length and "context_tokens" in stats:
-        used = stats["context_tokens"]
-        parts.append(f"ctx {used:,} / {context_length:,} ({used / context_length * 100:.1f}%)")
     if parts:
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 

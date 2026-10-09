@@ -37,9 +37,15 @@ The conversation may have outgrown the context window. See
 file. Files saved by earlier versions keep their reasoning inline in `content` and cannot be
 split. See [thinking-tags.md](thinking-tags.md).
 
-## "File too large (N KB max)" / "File not found."
-`/read`, `@@<path>` and `/system <file>` refuse files above `read_file_max_kb` (default 32).
-Raise it in the config file, or split the file. Paths with spaces need quotes for
+## "Not sent: the prompt would be N tokens but the context window is M"
+The prompt (system prompt, the conversation so far and the new message) does not fit the
+server's context window, so nothing was sent and the conversation is unchanged. Shorten the
+message or the included file, free space with `/clear` (`/save` first), or restart
+llama-server with a larger `-c`. See [statistics](statistics.md#the-pre-send-check). A file
+over 8 MB is refused earlier with "File too large to read."
+
+## "File not found."
+Paths with spaces need quotes for
 `/read`; inside `@@<...>` they need none. When an `@@<path>` or `/read` file cannot be
 read, the whole message is not sent and the error names the file.
 

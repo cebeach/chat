@@ -1,7 +1,7 @@
 """Client for the llama.cpp server's native HTTP API.
 
-Only native endpoints are used: /health, /props, /apply-template and
-/completion. See tools/server/README.md in the llama.cpp source. The model
+Only native endpoints are used: /health, /props, /apply-template, /tokenize
+and /completion. See tools/server/README.md in the llama.cpp source. The model
 being served and its context length are read from /props, never chosen by
 the client.
 
@@ -141,6 +141,40 @@ class LlamaClient:
         resp.raise_for_status()
         return resp.json()["prompt"]
 
+    def count_tokens(self, text, add_special=True):
+        """The number of tokens the server makes of `text`, from POST /tokenize.
+
+        /completion tokenizes its prompt with add_special=true and parse_special=true
+        (the defaults here); /tokenize itself defaults add_special to false, so it is
+        always sent explicitly. Pass add_special=False to count a fragment without the
+        BOS a whole prompt carries. The timeout grows with the text.
+        """
+        resp = requests.post(
+            f"{self.base_url}/tokenize",
+            json={"content": text, "add_special": add_special, "parse_special": True},
+            timeout=30 + len(text) // 100_000,
+        )
+        resp.raise_for_status()
+        return len(resp.json()["tokens"])
+
+    def prompt_tokens(self, messages, model=None):
+        """The exact size of the prompt chat() would send for `messages`: the server's
+        rendering of the chat template (/apply-template), counted by /tokenize."""
+        timeout = 30 + sum(len(m["content"]) for m in messages) // 50_000
+        body = {"model": model} if model else {}
+        return self.count_tokens(self._apply_template(messages, timeout=timeout, **body))
+
+    def check_fit(self, messages, model=None):
+        """Price a prompt against the context window: (needed, n_ctx).
+
+        Re-reads the server first (refresh), so n_ctx is the one in force now; pass
+        refreshed=True to the chat() that follows to avoid reading it twice. n_ctx is
+        None when the server did not report one. Raises requests exceptions like the
+        calls it makes.
+        """
+        self.refresh()
+        return self.prompt_tokens(messages, model=model), self.server_n_ctx
+
     @property
     def think_tags(self):
         """The active thinking tags as of the last refresh: (start, end, source) or None."""
@@ -236,7 +270,7 @@ class LlamaClient:
         self._think_identity = identity
         self._think_current = (*pair, "detected") if pair else None
 
-    def chat(self, model, messages, options=None):
+    def chat(self, model, messages, options=None, refreshed=False):
         """Send a chat request. Returns a LlamaChatStream that yields tokens.
 
         The server applies the model's chat template (/apply-template); the
@@ -252,8 +286,11 @@ class LlamaClient:
         Args:
             options: Dict of model parameters (seed, temperature, top_p).
                      None values are omitted.
+            refreshed: True when check_fit() just re-read the server, so this call
+                       does not do it again.
         """
-        self.refresh()
+        if not refreshed:
+            self.refresh()
         if self._think_unresolved:
             raise ThinkTagsError(self._think_unresolved)
         think = self._think_current
