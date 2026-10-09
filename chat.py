@@ -2,6 +2,7 @@
 """AI Chat — a terminal chat application powered by the llama.cpp server."""
 
 import argparse
+import math
 from pathlib import Path
 import re
 import shlex
@@ -30,6 +31,9 @@ from ui import (
     display_info,
     display_options,
     display_prompt_size,
+    format_option,
+    format_server_option,
+    option_rows,
     display_stats,
     display_truncated_warning,
     echo_suppressed,
@@ -66,7 +70,63 @@ def parse_args():
     return parser.parse_args()
 
 
-_OPTION_KEYS = {"seed": int, "temperature": float, "top_p": float}
+# The sampling options a session can override: the type /set parses and what the server
+# accepts. The server clamps most out-of-range values silently and answers a few with
+# HTTP 400, so the app checks first and refuses what it would otherwise get wrong.
+_OPTION_KEYS = {
+    "seed": int,
+    "temperature": float,
+    "top_p": float,
+    "min_p": float,
+    "repeat_penalty": float,
+    "n_predict": int,
+}
+_OPTION_RULES = {
+    "seed": (lambda v: -1 <= v <= 0xFFFFFFFF, "an integer from -1 (random) to 4294967295"),
+    "temperature": (lambda v: v >= 0, "a number >= 0 (0 is greedy)"),
+    "top_p": (lambda v: 0 <= v <= 1, "a number from 0 to 1 (1 disables it)"),
+    "min_p": (lambda v: 0 <= v <= 1, "a number from 0 to 1 (0 disables it)"),
+    "repeat_penalty": (lambda v: v > 0, "a number > 0 (1 disables it)"),
+    "n_predict": (
+        lambda v: v >= 1,
+        "an integer >= 1 (`/set n_predict default` returns to the server's limit)",
+    ),
+}
+
+
+def _validated(key, value):
+    """`value` as option `key`'s type, or ValueError saying what the option accepts.
+
+    A bool is refused (it is an int in Python), as is a float for an integer option
+    (TOML `n_predict = 5.5`); an int is fine for a float option (`temperature = 1`).
+    """
+    kind = _OPTION_KEYS[key]
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not ok or (kind is int and not isinstance(value, int)) or not math.isfinite(value):
+        raise ValueError(f"must be {kind.__name__}")
+    value = kind(value)
+    accepts, description = _OPTION_RULES[key]
+    if not accepts(value):
+        raise ValueError(f"must be {description}")
+    return value
+
+
+def _initial_options(config):
+    """The session's overrides from config.toml: only the keys that are set and valid.
+
+    State.options holds nothing else. /props reports the server's launch defaults but
+    never what a request sent, so the app must remember what it sends; every other
+    option is left out of the request and the server's own default applies.
+    """
+    options = {}
+    for key in _OPTION_KEYS:
+        if config.get(key) is None:
+            continue
+        try:
+            options[key] = _validated(key, config[key])
+        except ValueError as exc:
+            display_error(f"config.toml: {key} {exc}; ignored.")
+    return options
 
 
 # Bounds the memory a read and the /tokenize request body can take. It is not the
@@ -233,27 +293,47 @@ def _prepare_user_message(text):
     return flat, includes
 
 
-def _handle_set(args, state):
-    """Handle the /set command: list, query, or modify a model option."""
+def _server_option(client, key):
+    """The server's launch value for option `key`, as text; "unavailable" if /props cannot be read."""
+    server = client.sampling_defaults()
+    return format_server_option(key, server.get(key) if server else None)
+
+
+def _handle_set(args, state, client):
+    """Handle the /set command: list, query, or modify a model option.
+
+    The server's values are read from /props on every call. An option the user has not
+    set is absent from state.options, so nothing is sent for it.
+    """
     if not args:
-        display_options(state.options)
+        display_options(option_rows(_OPTION_KEYS, client.sampling_defaults(), state.options))
         return
     parts = args.strip().split(None, 1)
     key = parts[0]
     if key not in _OPTION_KEYS:
-        display_error(f"Unknown option: {key}. Available: {', '.join(sorted(_OPTION_KEYS))}")
+        display_error(f"Unknown option: {key}. Available: {', '.join(_OPTION_KEYS)}")
     elif len(parts) < 2:
-        val = state.options[key]
-        display_info(f"{key}: {val if val is not None else 'default'}")
+        server = _server_option(client, key)
+        if key in state.options:
+            shown = format_option(key, state.options[key], reported=False)
+            display_info(f"{key}: {shown} (set for this session; the server's is {server})")
+        else:
+            display_info(f"{key}: {server} (server)")
     elif parts[1] == "default":
-        state.options[key] = None
-        display_info(f"{key} reset to default.")
+        state.options.pop(key, None)
+        display_info(f"{key} reset; the server's value ({_server_option(client, key)}) applies.")
     else:
         try:
-            state.options[key] = _OPTION_KEYS[key](parts[1])
-            display_info(f"{key} set to {state.options[key]}.")
+            value = _OPTION_KEYS[key](parts[1])
         except ValueError:
             display_error(f"{key} must be {_OPTION_KEYS[key].__name__} (or 'default').")
+            return
+        try:
+            state.options[key] = _validated(key, value)
+        except ValueError as exc:
+            display_error(f"{key} {exc}.")
+            return
+        display_info(f"{key} set to {format_option(key, state.options[key], reported=False)}.")
 
 
 # Boolean settings that /config can toggle for the session, with their defaults.
@@ -269,7 +349,9 @@ def _handle_config(args, state, client=None):
         _sync_server_info(state, client.server_model, client.server_n_ctx)
         _update_think_tags(state, client.think_tags)
     if not args.strip():
-        display_config(state.config, state.model, state.options, state.think_tags)
+        server = client.sampling_defaults() if client is not None else None
+        rows = option_rows(_OPTION_KEYS, server, state.options)
+        display_config(state.config, state.model, rows, state.think_tags)
         return
     parts = args.split()
     key = parts[0]
@@ -378,7 +460,8 @@ def _fits_window(client, messages, state, outcome="Not sent"):
         return True, None
     if not n_ctx:
         return True, None
-    reserve = state.config.get("reserve_output_tokens", 0)
+    # A reply capped with /set n_predict needs no more room than that.
+    reserve = max(state.config.get("reserve_output_tokens", 0), state.options.get("n_predict", 0))
     if not tokens.fits(needed, n_ctx, reserve):
         display_error(tokens.refusal(needed, n_ctx, reserve, outcome))
         return False, (needed, n_ctx)
@@ -541,7 +624,7 @@ def handle_command(cmd, args, client, conversation, state):
         display_info(f"Stats display: {status}")
 
     elif cmd == "/set":
-        _handle_set(args, state)
+        _handle_set(args, state, client)
 
     elif cmd == "/retry":
         if len(conversation.messages) < 2:
@@ -634,11 +717,7 @@ def main():
         model=client.server_model,
         config=config,
         context_length=client.server_n_ctx,
-        options={
-            "seed": config["seed"],
-            "temperature": config["temperature"],
-            "top_p": config["top_p"],
-        },
+        options=_initial_options(config),
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
     )
     # Startup value for /config; no announcement (the /config row covers it).

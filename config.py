@@ -23,6 +23,9 @@ DEFAULTS = {
     "seed": None,
     "temperature": None,
     "top_p": None,
+    "min_p": None,
+    "repeat_penalty": None,
+    "n_predict": None,
     # Price every prompt against the context window before sending (see docs/statistics.md).
     "context_check": True,
     # Tokens kept free for the reply when deciding whether a prompt fits; 0 keeps none.

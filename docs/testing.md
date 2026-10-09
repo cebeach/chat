@@ -431,6 +431,7 @@ paste details, `fg` after Ctrl-Z, what `stty -a` shows). Check those by hand; `d
 | `tests/pty_helpers.py` | Runs a child process on a pty: controlling terminal, throwaway `HOME`, prompt counting, holds, tty flags |
 | `tests/test_prompt.py`, `tests/test_turn_echo.py`, `tests/test_prompt_pty.py`, `tests/test_repl_integration.py` | The prompt and echo tests (see [Pseudo-terminal tests](#pseudo-terminal-tests-the-prompt-and-the-tty)) |
 | `tests/test_think_tags_integration.py` | Thinking-tag detection and a real reply, checked against each real model (see [Thinking-tag tests](#thinking-tag-tests)) |
+| `tests/test_sampling_options_integration.py` | `integration`: the sampling options against a server started with known launch flags, all passed with `llama_args` (`--temp`, `--top-p`, `--min-p`, `--repeat-penalty`, `--seed`, `--predict`): `/props` reports them, `/set` shows them as the server value, an override reaches `/completion` (an `n_predict` cap, a different seed), and the real `chat.py` on a pty shows and applies them. A second class with other flags checks that `/set` follows the launch flags. It loads the model twice, once per distinct flag set. `/props` always reports `n_predict` as -1, and a test pins that, so a llama.cpp that starts reporting it is noticed |
 
 The offline tests never touch port 8001, your real `tests/llama-server.local.toml` or the
 real environment, so they give the same result on every machine.

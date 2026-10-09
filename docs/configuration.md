@@ -20,13 +20,19 @@ current session only.
 | `auto_save` | bool | `true` | Save after each reply and on exit. |
 | `save_thinking` | bool | `true` | Keep the model's reasoning (the `thinking` field) in saved files. |
 | `think_start`, `think_end` | string | `""` | Override the detected thinking tags. Both must be set. |
-| `seed` | int | unset | Sampling seed. Unset means the server's default (random). |
-| `temperature` | float | unset | Unset means the server's default (0.8). |
-| `top_p` | float | unset | Unset means the server's default (0.95). |
+| `seed` | int | unset | Sampling seed. |
+| `temperature` | float | unset | Randomness of the reply. |
+| `top_p` | float | unset | Nucleus sampling cutoff. |
+| `min_p` | float | unset | Drop tokens much less likely than the best one. |
+| `repeat_penalty` | float | unset | Discourage repeating recent tokens. |
+| `n_predict` | int | unset | Longest reply, in tokens (1 or more). Overrides a server `--predict`; it cannot raise it to unlimited. |
 | `context_check` | bool | `true` | Count every prompt with the server before sending and refuse one that cannot fit the context window; warn above 80%. `/config context_check on\|off` changes it for the session. Off means no counting, no refusal and no warning. See [statistics](statistics.md#the-pre-send-check). |
-| `reserve_output_tokens` | int | `0` | Tokens kept free for the reply when deciding whether a prompt fits. It guarantees nothing: the reply length is unbounded unless you set `n_predict` on the server, and a thinking model's is hard to predict. Try a few hundred to a few thousand for a thinking model. |
+| `reserve_output_tokens` | int | `0` | Tokens kept free for the reply when deciding whether a prompt fits. It guarantees nothing: the reply length is unbounded unless you set `n_predict` (here, with `/set`, or `--predict` on the server), and a thinking model's is hard to predict. Try a few hundred to a few thousand for a thinking model. An `n_predict` you set is kept free too (the larger of the two); a limit from the server's `--predict` is not, because `/props` does not report it. |
 
-TOML has no "unset": leave a key out to use the server's default.
+TOML has no "unset": leave a key out and nothing is sent for it, so the server's own value
+applies. A model option you do set starts every session as an override that `/set` shows
+and can change or remove. Values are checked on start-up with the same rules as `/set`
+(see [commands](commands.md#set)); an invalid one is reported by name and ignored.
 
 The model is never a setting. The app uses whichever model llama-server is serving,
 and its context length is read from the server. If you restart the server with

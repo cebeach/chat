@@ -155,6 +155,49 @@ class TestRefresh:
         assert self.client.think_tags == ("<think>", "</think>", "config")
 
 
+class TestSamplingDefaults:
+    PARAMS = {"temperature": 0.6, "min_p": 0.1, "seed": 4294967295, "n_predict": -1}
+
+    def props(self, params=PARAMS):
+        return {**PROPS, "default_generation_settings": {"n_ctx": 4096, "params": params}}
+
+    def test_returns_the_launch_params_from_props(self):
+        with props_patch(self.props()):
+            assert LlamaClient(URL).sampling_defaults() == self.PARAMS
+
+    def test_reads_props_on_every_call_and_caches_nothing(self):
+        client = LlamaClient(URL)
+        with props_patch(self.props()) as get:
+            client.sampling_defaults()
+            client.sampling_defaults()
+        assert get.call_count == 2
+        with props_patch(self.props({"temperature": 0.2})):
+            assert client.sampling_defaults() == {"temperature": 0.2}
+
+    @pytest.mark.parametrize(
+        "props",
+        [
+            PROPS,  # no params block
+            {**PROPS, "default_generation_settings": {"params": "x"}},
+            {**PROPS, "default_generation_settings": None},
+            ["not", "a", "dict"],
+        ],
+    )
+    def test_none_when_props_lacks_the_params(self, props):
+        with props_patch(props):
+            assert LlamaClient(URL).sampling_defaults() is None
+
+    def test_none_when_props_cannot_be_read(self):
+        with mock.patch("requests.get", side_effect=requests.ConnectionError("down")):
+            assert LlamaClient(URL).sampling_defaults() is None
+
+    def test_a_props_that_is_not_json_is_none(self):
+        bad = FakeResponse(ValueError("not json"))
+        bad.json = mock.Mock(side_effect=ValueError("not json"))
+        with mock.patch("requests.get", return_value=bad):
+            assert LlamaClient(URL).sampling_defaults() is None
+
+
 class TestClient:
     @pytest.fixture(autouse=True)
     def _setup(self):

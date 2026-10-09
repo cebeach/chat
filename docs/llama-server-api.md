@@ -71,13 +71,13 @@ and render them internally, which hides all of that.
 | Endpoint | What it does | When AI Chat calls it | Why |
 |---|---|---|---|
 | `GET /health` | Says whether the server is ready | Once, at startup | To fail early with a clear message when no server is running |
-| `GET /props` | Server properties: the model, the context window, the chat template | At startup, before every message is sent, and for `/config` and `/info` | To follow the server: a restart with another model or `-c` is noticed. The window size feeds the [token check](statistics.md#the-pre-send-check) |
+| `GET /props` | Server properties: the model, the context window, the chat template | At startup, before every message is sent, and for `/config`, `/info` and `/set` | To follow the server: a restart with another model or `-c` is noticed. The window size feeds the [token check](statistics.md#the-pre-send-check) |
 | `POST /apply-template` | Renders messages with the model's chat template into prompt text, without generating anything | Twice per message with the token check on (once to count, once for the real request), once with it off; on `/info` and `/system`; and when a new model is first seen | To build the exact prompt the model will see, and to detect the model's thinking tags |
 | `POST /tokenize` | Turns text into tokens | Once per message to count the prompt; several times for `/info` | To measure a prompt exactly before it is sent |
 | `POST /completion` | Generates the reply, streamed token by token | Once per message, after the checks pass | The model's answer |
 
 Nothing else is called: no `/slots`, `/metrics`, `/detokenize`, `/embedding`, `/models` or
-`/v1/*` endpoint, and the app never changes a server setting (`POST /props` is not used).
+`/v1/*` endpoint, and the app never changes a server setting (`POST /props` is not used, and does nothing in current llama-server).
 
 Each call has its own timeout so a stuck server does not hang the app forever:
 `/health` 5 seconds, `/props` 10, `/apply-template` and `/tokenize` 30 seconds plus a
@@ -99,12 +99,13 @@ start the app again.
 
 ### `GET /props`
 
-Returns a JSON object describing the running server. AI Chat reads three things from it:
+Returns a JSON object describing the running server. AI Chat reads four things from it:
 
 | Field | Used for |
 |---|---|
 | `model_alias` (else `model_path`) | The model name shown in the welcome line, `/config`, and the "model: old → new" notice, and recorded with each reply |
 | `default_generation_settings.n_ctx` | The context window (per slot), for the token check and `/info` |
+| `default_generation_settings.params` | The sampling options the server was launched with (`temperature`, `top_p`, `min_p`, `repeat_penalty`, `seed`, ...), shown by `/set`. These are launch defaults only: `/props` never reflects what a request sent. `seed` unset is the unsigned `4294967295`, and floats are widened from 32 bits (`0.95` arrives as `0.949999988...`). `n_predict` is always `-1` here, even with `--predict`, so it is not used |
 | `chat_template` | The template's source text, used together with the model path to recognize which model is running (a change means a different model) and to help find its thinking tags |
 
 ```bash
@@ -114,6 +115,8 @@ curl -s http://127.0.0.1:8001/props | python3 -m json.tool | less
 The app re-reads it before every message instead of remembering it, so you can stop the
 server and start it again with another model or another `-c` in the middle of a session.
 If `/props` cannot be read, the app keeps the values it had; it never invents new ones.
+`/set` and `/config` read `/props` again each time they run and show `unavailable` when it
+fails; the sampling defaults are not remembered between calls.
 
 ### `POST /apply-template`
 
@@ -175,9 +178,9 @@ What AI Chat sends:
 }
 ```
 
-`seed`, `temperature` and `top_p` are included only when you set them (with `/set` or in
-the config file); otherwise the server's defaults apply. `n_predict` (maximum reply length)
-is not sent, so the server's own limit is used, which by default is "until the model
+`seed`, `temperature`, `top_p`, `min_p`, `repeat_penalty` and `n_predict` are included only
+when you set them (with `/set` or in the config file); otherwise the server's own values
+apply, and for `n_predict` that is its `--predict` limit, by default "until the model
 finishes". See the llama.cpp README for the dozens of other options this endpoint takes;
 the app uses none of them.
 
@@ -239,7 +242,9 @@ step 2 cancels the message with "Cancelled."
 - `/system` (when setting a prompt) renders and counts the conversation with the new prompt
   to check that it fits.
 - `/retry` and `/read` send a message like any other, so they follow the same steps.
-- `/save`, `/load`, `/clear`, `/set`, `/stats`, `/recall`, `/cat`, `/conversations` and
+- `/set` (without a value to set) reads `/props` for the server's sampling defaults; setting
+  or resetting an option makes no request.
+- `/save`, `/load`, `/clear`, `/stats`, `/recall`, `/cat`, `/conversations` and
   `/exit` make no requests at all.
 
 ## Server options that matter to the app

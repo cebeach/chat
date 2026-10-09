@@ -104,13 +104,41 @@ letters, digits, `-` and `_` in the name become `_`. Saving to an existing name
 overwrites it.
 
 ## /set
-- `/set` shows `seed`, `temperature` and `top_p`.
+- `/set` shows six options, each with the server's value and this session's override.
 - `/set <key>` shows one option.
-- `/set <key> <value>` changes it; `/set <key> default` returns it to the server's
-  default.
+- `/set <key> <value>` overrides it for the session; `/set <key> default` removes the
+  override, so the server's own value applies again (the server is not changed).
 
-`seed` is an integer; `temperature` and `top_p` are numbers. Changes last for the
-session; use [the config file](configuration.md) for permanent values.
+| Option | Type | Accepted | Effect |
+|---|---|---|---|
+| `temperature` | number | 0 or more | Randomness; 0 always picks the likeliest token |
+| `top_p` | number | 0 to 1 | Keep only the likeliest tokens whose probabilities add up to this; 1 disables it |
+| `min_p` | number | 0 to 1 | Drop tokens less than this fraction as likely as the best one; 0 disables it |
+| `repeat_penalty` | number | above 0 | Discourages repeating recent tokens; 1 disables it |
+| `seed` | integer | -1 to 4294967295 | Fixes the random draws; -1 is random |
+| `n_predict` | integer | 1 or more | Longest reply in tokens |
+
+Out-of-range values are refused with a message and nothing changes. (llama-server would
+clamp some of them silently and answer others with an error.)
+
+**Server value and session override.** The *Server value* column is read from the server's
+`/props` every time you run `/set`, so it follows a server restarted with other flags. It
+shows what the server was started with: `llama-server --temp 0.6` shows `temperature 0.6`.
+The *Session override* column is what this session sends instead. The server cannot report
+that, because `/props` shows only its launch defaults and never what a request sent, so
+the app remembers just the options you set; every other option is not sent and the server's
+own value applies. If the server cannot be read the column says `unavailable`; the app
+never guesses a default.
+
+`n_predict` shows `not reported` for the server: `/props` always answers -1 for it, even
+when llama-server was started with `--predict`, so the app cannot tell. A server limit set
+with `--predict` still applies when you have not set `n_predict`. There is no way to lift
+it from here: llama-server reads a request's `n_predict` of -1 as "use the launch value",
+so `/set n_predict` accepts only 1 or more, and `/set n_predict default` goes back to the
+server's own limit.
+
+Changes last for the session; use [the config file](configuration.md) for values that
+should apply from the start.
 
 ## /stats
 Turns the dim stats line printed after each reply on or off. It starts on.
