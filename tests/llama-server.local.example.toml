@@ -18,6 +18,6 @@
 # startup_timeout wins over this. Default: 120.
 # startup_timeout = 120
 
-# Accepted and checked, but not used yet: reserved for running several servers at once.
+# A record of GPU memory: accepted and checked, but nothing reads it.
 # [budget]
 # vram_mb = 24000
