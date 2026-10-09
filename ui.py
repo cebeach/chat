@@ -75,7 +75,7 @@ def print_help():
     table.add_row("/recall <n>", "Recall message pair n into context")
     table.add_row("/retry", "Regenerate the last response")
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
-    table.add_row("/set", "Show model options (seed, temperature, top_p)")
+    table.add_row("/set", "Show model options and this session's overrides of the server's values")
     table.add_row("/set <key> <val>", "Set a model option (or 'default' to reset)")
     table.add_row("/stats", "Toggle token and context stats display")
     table.add_row(
@@ -98,11 +98,52 @@ def display_conversations(conversations):
     console.print(table)
 
 
-LLAMA_DEFAULTS = {
-    "seed": "random",
-    "temperature": 0.8,
-    "top_p": 0.95,
-}
+_SEED_RANDOM = 0xFFFFFFFF  # the server's "pick a random seed", which /props reports unsigned
+
+
+def format_option(key, value, reported=True):
+    """Text for an option's value.
+
+    reported: the value came from /props, which widens float32 (0.95 arrives as
+    0.949999988...), so floats are rounded; a value the user typed is shown as typed.
+    None is what a /props that could not be read leaves behind; it is never replaced by
+    a guessed default.
+    """
+    if value is None:
+        return "unavailable"
+    if key == "seed" and value in (-1, _SEED_RANDOM):
+        return "random"
+    if reported and isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
+
+
+# Options whose launch value /props does not report. For n_predict it reports the constant -1
+# (llama-server builds the /props params from a default task, copying only the sampling
+# settings), even when the server was started with --predict.
+_NOT_REPORTED = {"n_predict"}
+
+
+def format_server_option(key, value):
+    """Text for the server's value of option `key` as /props reported it (None: unreadable)."""
+    if key in _NOT_REPORTED:
+        return "not reported"
+    return format_option(key, value)
+
+
+def option_rows(keys, server, overrides):
+    """(option, server value, session override) text for each key.
+
+    server: the dict from LlamaClient.sampling_defaults(), or None if /props was not
+    readable. overrides: the options this session sends (only the keys the user set).
+    """
+    rows = []
+    for key in keys:
+        shown = format_server_option(key, server.get(key) if server else None)
+        rows.append(
+            (key, shown, format_option(key, overrides[key], reported=False) if key in overrides else "-")
+        )
+    return rows
 
 
 def describe_think_tags(think_tags):
@@ -118,6 +159,7 @@ def describe_think_tags(think_tags):
 
 
 def display_config(config, current_model, options=None, think_tags=None):
+    """options: rows from option_rows(), or None to leave the model options out."""
     table = Table(title="Configuration", show_header=True, header_style="bold")
     table.add_column("Setting", style="bold cyan")
     table.add_column("Value")
@@ -127,24 +169,27 @@ def display_config(config, current_model, options=None, think_tags=None):
     table.add_row("conversations_dir", config["conversations_dir"])
     table.add_row("save_thinking", "on" if config.get("save_thinking", True) else "off")
     table.add_row("think_tags", describe_think_tags(think_tags))
-    if options is not None:
-        for key in sorted(options):
-            val = options[key]
-            if val is not None:
-                table.add_row(key, str(val))
-            else:
-                table.add_row(key, f"{LLAMA_DEFAULTS[key]} [dim](default)[/dim]")
+    for key, server, override in options or ():
+        if override != "-":
+            table.add_row(key, f"{override} [dim](set; server {server})[/dim]")
+        else:
+            table.add_row(key, f"{server} [dim](server)[/dim]")
     console.print(table)
 
 
-def display_options(options):
-    """Display current model options in a table."""
+def display_options(rows):
+    """Display the model options: the server's value and this session's override.
+
+    rows: from option_rows(). The server column is read from /props on every call; an
+    override is the only thing held client-side, because /props reports launch defaults
+    and never what a request sent.
+    """
     table = Table(title="Model Options", show_header=True, header_style="bold")
     table.add_column("Option", style="bold cyan")
-    table.add_column("Value")
-    for key in sorted(options):
-        val = options[key]
-        table.add_row(key, str(val) if val is not None else "(default)")
+    table.add_column("Server value")
+    table.add_column("Session override")
+    for key, server, override in rows:
+        table.add_row(key, server, override)
     console.print(table)
 
 

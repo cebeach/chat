@@ -188,13 +188,8 @@ class LlamaClient:
         same response (see detect_think_tags). The previous values are kept
         when /props cannot be read or lacks a field. Never raises.
         """
-        try:
-            resp = requests.get(f"{self.base_url}/props", timeout=10)
-            resp.raise_for_status()
-            props = resp.json()
-        except (requests.RequestException, ValueError):
-            return
-        if not isinstance(props, dict):
+        props = self._get_props()
+        if props is None:
             return
         model = props.get("model_alias") or props.get("model_path")
         if model:
@@ -204,6 +199,31 @@ class LlamaClient:
         except (KeyError, TypeError, ValueError):
             pass
         self._detect_think_tags(props)
+
+    def _get_props(self):
+        """GET /props as a dict, or None when it cannot be read. Never raises."""
+        try:
+            resp = requests.get(f"{self.base_url}/props", timeout=10)
+            resp.raise_for_status()
+            props = resp.json()
+        except (requests.RequestException, ValueError):
+            return None
+        return props if isinstance(props, dict) else None
+
+    def sampling_defaults(self):
+        """The sampling options the server was launched with, freshly read from GET /props.
+
+        A dict keyed like the /completion request (temperature, top_p, min_p,
+        repeat_penalty, seed, n_predict, ...), or None when /props cannot be read.
+        These are launch defaults only: /props never reflects what a client sent in
+        a request. Nothing is cached, so a restarted server is seen on the next call.
+        """
+        props = self._get_props()
+        try:
+            params = props["default_generation_settings"]["params"]
+        except (KeyError, TypeError):
+            return None
+        return params if isinstance(params, dict) else None
 
     def detect_think_tags(self):
         """Return the active thinking tags as (start, end, source), or None.
@@ -285,8 +305,10 @@ class LlamaClient:
                 tags could not be determined (nothing is sent to /completion).
 
         Args:
-            options: Dict of model parameters (seed, temperature, top_p).
-                     None values are omitted.
+            options: Dict of the session's overrides of the server's sampling
+                     defaults (seed, temperature, top_p, min_p, repeat_penalty,
+                     n_predict). Only the keys the user set are present; None
+                     values are omitted.
             refreshed: True when check_fit() just re-read the server, so this call
                        does not do it again.
         """

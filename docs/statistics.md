@@ -41,7 +41,9 @@ would not fit is refused and the old one stays.
 What the check cannot do: it only knows the prompt. A reply that outgrows the window
 while it is being written is stopped early by llama-server (when no room is left; it is not
 an error). The 80% warning and the optional `reserve_output_tokens` setting, which keeps
-that many tokens free when deciding whether a prompt fits, make that less likely. They are a
+that many tokens free when deciding whether a prompt fits, make that less likely. An
+`n_predict` you set with `/set` is kept free as well (the larger of the two counts); a
+limit from the server's own `--predict` is not, because `/props` does not report it. They are a
 margin, not a guarantee, because the length of a reply (especially a thinking model's)
 cannot be known in advance.
 
@@ -68,7 +70,7 @@ Settings (see [configuration](configuration.md)):
 | Setting | Effect |
 |---|---|
 | `context_check` | `false` turns off all of the above: no counting, no refusal, no warning, no prompt line. A prompt that is too large then reaches the server and comes back as its own error. Also `/config context_check on\|off`. Use it if the reported window is wrong |
-| `reserve_output_tokens` | Tokens kept free for the reply (default 0) |
+| `reserve_output_tokens` | Tokens kept free for the reply (default 0); a `/set n_predict` larger than it is used instead |
 
 Files over 8 MB are refused before any counting ("File too large to read.").
 
@@ -109,7 +111,8 @@ tokenizer. For each message it makes these calls:
 The count therefore equals what the server reports as the request's prompt tokens after
 the reply. A test against a real server checks that equality.
 
-A prompt fits when `prompt + reserve_output_tokens + 1 <= window`. The `+ 1` is because
+A prompt fits when `prompt + reserve + 1 <= window`, where the reserve is `reserve_output_tokens`
+or your `n_predict`, whichever is larger. The `+ 1` is because
 llama-server rejects a request whose prompt alone is as long as the window, even with
 nothing to generate. The warning is for a prompt above 80% of the window.
 

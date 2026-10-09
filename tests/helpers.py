@@ -67,6 +67,16 @@ class FakeServer:
         self.cont, self.gen, self.real_prompt = cont, gen, real_prompt
         self.fail = False
         self.bad_json = False
+        # What /props reports as the server's launch sampling defaults. A real server
+        # widens float32 values and reports "random" as the unsigned 4294967295.
+        self.params = {
+            "seed": 4294967295,
+            "temperature": 0.800000011920929,
+            "top_p": 0.949999988079071,
+            "min_p": 0.05000000074505806,
+            "repeat_penalty": 1.0,
+            "n_predict": -1,
+        }
         self.props_calls = 0
         self.template_calls = []
         self.tokenize_calls = []
@@ -91,7 +101,7 @@ class FakeServer:
                 "model_path": self.model_path,
                 "model_alias": self.model_path,
                 "chat_template": self.source,
-                "default_generation_settings": {"n_ctx": self.n_ctx},
+                "default_generation_settings": {"n_ctx": self.n_ctx, "params": dict(self.params)},
             }
         )
 
