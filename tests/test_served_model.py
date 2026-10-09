@@ -12,7 +12,7 @@ import pytest
 
 import chat
 import ui
-from chat import State, _near_context_limit, _reply_model, _sync_server_info, handle_command, parse_args
+from chat import State, _reply_model, _sync_server_info, handle_command, parse_args
 from config import DEFAULTS
 from conversation import Conversation
 from llama_client import LlamaChatStream, LlamaClient
@@ -50,23 +50,6 @@ class TestSyncServerInfo:
         state = make_state(model="[a] old")
         out = render(lambda: _sync_server_info(state, "[/THINK] new", 10))
         assert "model: [a] old → [/THINK] new (context 10 tokens)" in out
-
-
-class TestContextLimit:
-    def test_threshold_is_80_percent_of_the_current_context(self):
-        assert not _near_context_limit(209715, 262144)
-        assert _near_context_limit(209716, 262144)
-        assert not _near_context_limit(0, 262144)
-
-    def test_after_a_swap_to_a_smaller_context_the_same_prompt_now_warns(self):
-        # The case the stale value got wrong: 150000 tokens is fine for 262144
-        # but over the limit for 131072.
-        assert not _near_context_limit(150000, 262144)
-        assert _near_context_limit(150000, 131072)
-
-    def test_unknown_context_never_warns(self):
-        assert not _near_context_limit(10**9, None)
-        assert not _near_context_limit(10**9, 0)
 
 
 class TestConfigRefresh:

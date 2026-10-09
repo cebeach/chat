@@ -65,7 +65,7 @@ Now Mara confronts Eli about the missing cargo.
   (a comma, say) stays as you typed it, after the blank line. Newlines you typed around
   the marker are kept. A file that is empty or only whitespace adds nothing.
 - Text inside an included file is never expanded, so a `@@<...>` in it stays as it is.
-- If a file is missing, unreadable or larger than `read_file_max_kb`, an error names it,
+- If a file is missing, unreadable or over 8 MB, an error names it,
   the message is **not sent** and nothing is added to the conversation. Retype the message
   (the up arrow recalls a one-line message, not a `"""` block). A `@@<` with no closing `>` on
   its line is an error too; a message that ends up empty is not sent.

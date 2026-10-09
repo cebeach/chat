@@ -24,9 +24,10 @@ A Python chat application that provides a terminal-based interface for chatting 
 - **Local llama.cpp server** — uses whichever model the server is serving; its context window is read from the server
 - **Save/load conversations** — JSON files with tab-completed names; auto-saved after every reply and on exit
 - **Thinking blocks** — kept in saved files by default, separate from the answer; `save_thinking = false` or `/config save_thinking [on|off]` omits them. Tags are detected from the server per model; details in [docs/thinking-tags.md](docs/thinking-tags.md)
-- **Files** — `@@<path>` puts a text file's contents inside a message, wherever you write it; `/read <path> ...` sends text files as a message; `/system <file>` loads a system prompt from a file in the current directory (all limited by `read_file_max_kb`, 32 KB by default)
+- **Files** — `@@<path>` puts a text file's contents inside a message, wherever you write it; `/read <path> ...` sends text files as a message; `/system <file>` loads a system prompt from a file in the current directory (a prompt that cannot fit the context window is refused before it is sent)
 - **Recall and retry** — `/recall <n>` re-injects an older exchange; `/retry` regenerates the last reply
-- **Stats** — tokens/sec, prompt tokens and context-window usage after each reply (`/stats` toggles), an 80% context warning, and `/info`
+- **Context check** — every prompt is counted exactly by the server before it is sent: one that cannot fit the window is refused (nothing is lost), one over 80% warns; `/info` breaks the prompt down by system prompt, your messages and replies (`context_check`, `reserve_output_tokens`)
+- **Stats** — tokens/sec, generated and prompt tokens after each reply (`/stats` toggles), and `/info`
 - **Model options** — `/set` for `seed`, `temperature` and `top_p` (session only)
 - **Input** — readline history (`~/.local/share/chat/history`), tab-completion of commands and conversation names, `"""` multiline input, Shift+Enter or Alt+Enter for a newline, bracketed paste
 - **Plain-text export** — `conv2txt.py` converts a saved conversation to text (thinking omitted unless `--keep-thinking`)

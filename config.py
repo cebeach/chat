@@ -23,7 +23,10 @@ DEFAULTS = {
     "seed": None,
     "temperature": None,
     "top_p": None,
-    "read_file_max_kb": 32,
+    # Price every prompt against the context window before sending (see docs/statistics.md).
+    "context_check": True,
+    # Tokens kept free for the reply when deciding whether a prompt fits; 0 keeps none.
+    "reserve_output_tokens": 0,
 }
 
 

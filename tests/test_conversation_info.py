@@ -1,18 +1,13 @@
-"""/info shows the context window, usage and ratio; stale usage is reset."""
+"""/info: the token breakdown, the window and the usage ratio."""
 
 import contextlib
 import io
 import re
 
-import pytest
-
-from chat import State, handle_command
-from config import DEFAULTS
-from conversation import Conversation
 from ui import display_conversation_info
 
 SUMMARY = {"messages": 2, "user_messages": 1, "assistant_messages": 1, "words": 4, "characters": 20}
-STATS = {"prompt_tokens": 1203, "completion_tokens": 142, "context_tokens": 1345}
+COUNTS = {"system": 10, "user": 100, "assistant": 200, "overhead": 14, "total": 324, "n_ctx": 8192}
 
 
 def render_fn(fn):
@@ -24,73 +19,34 @@ def render_fn(fn):
     return " ".join(re.sub(r"[│┃┏┓┡┩└┘━─┳╇┴]", " ", text).split())
 
 
-def info(stats=None, context_length=None):
-    return render_fn(lambda: display_conversation_info(SUMMARY, stats, context_length))
+def info(counts=None, context_length=None):
+    return render_fn(lambda: display_conversation_info(SUMMARY, counts, context_length))
 
 
 class TestInfoTable:
-    def test_shows_window_used_and_ratio(self):
-        out = info(STATS, 8192)
+    def test_shows_each_share_the_total_and_the_ratio(self):
+        out = info(COUNTS, 8192)
+        assert "Tokens: system prompt 10" in out
+        assert "Tokens: your messages 100" in out
+        assert "Tokens: AI replies 200" in out
+        assert "Tokens: template ≈ 14" in out
+        assert "Prompt tokens 324" in out
         assert "Context window 8,192 tokens" in out
-        assert "Context used 1,345 tokens" in out
-        assert "Context usage 16.4%" in out
+        assert "Window used 4.0%" in out
 
-    def test_no_reply_yet_shows_only_the_window(self):
-        out = info({}, 8192)
+    def test_without_counts_only_the_window_shows(self):
+        out = info(None, 8192)
         assert "Context window 8,192 tokens" in out
-        assert "Context used" not in out
-        assert "Context usage" not in out
+        assert "Prompt tokens" not in out and "Window used" not in out
 
-    def test_unknown_window_shows_used_but_no_ratio(self):
-        out = info(STATS, None)
+    def test_the_window_the_server_reported_with_the_counts_wins(self):
+        out = info({**COUNTS, "n_ctx": 2048}, 8192)
+        assert "Context window 2,048 tokens" in out and "Window used 15.8%" in out
+
+    def test_unknown_window_shows_the_counts_but_no_ratio(self):
+        out = info({**COUNTS, "n_ctx": None}, None)
         assert "Context window unknown" in out
-        assert "Context used 1,345 tokens" in out
-        assert "Context usage" not in out
+        assert "Prompt tokens 324" in out and "Window used" not in out
 
     def test_usage_above_the_window_renders(self):
-        assert "Context usage 109.9%" in info({"context_tokens": 9000}, 8192)
-
-
-class TestStaleStats:
-    def make_state(self):
-        config = {**DEFAULTS, "conversations_dir": self.tmp}
-        return State(model="/m/x.gguf", config=config, context_length=8192, last_stats=dict(STATS))
-
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path):
-        self.tmp = str(tmp_path)
-
-    def run_cmd(self, cmd, args, conversation, state):
-        render_fn(lambda: handle_command(cmd, args, None, conversation, state))
-
-    def test_clear_resets_last_stats(self):
-        state = self.make_state()
-        self.run_cmd("/clear", "", Conversation(), state)
-        assert state.last_stats == {}
-
-    def test_retry_resets_last_stats(self):
-        state = self.make_state()
-        conv = Conversation()
-        conv.add_user("q")
-        conv.add_assistant("a")
-        self.run_cmd("/retry", "", conv, state)
-        assert state.last_stats == {}
-
-    def test_successful_load_resets_last_stats(self):
-        saved = Conversation()
-        saved.add_user("q")
-        saved.add_assistant("a")
-        saved.save(self.tmp, name="c")
-        state = self.make_state()
-        self.run_cmd("/load", "c", Conversation(), state)
-        assert state.last_stats == {}
-
-    def test_failed_load_keeps_last_stats(self):
-        state = self.make_state()
-        self.run_cmd("/load", "missing", Conversation(), state)
-        assert state.last_stats == STATS
-
-    def test_retry_with_nothing_to_retry_keeps_last_stats(self):
-        state = self.make_state()
-        self.run_cmd("/retry", "", Conversation(), state)
-        assert state.last_stats == STATS
+        assert "Window used 109.9%" in info({**COUNTS, "total": 9000}, None)

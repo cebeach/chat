@@ -30,7 +30,7 @@ an instruction-tuned model; see [Choosing a model](models.md).
 ```
 >>> Explain what a context window is in two sentences.
 Assistant: ...
-  58 tokens | 41.0 tok/s | 31 prompt tokens | ctx 89 / 8,192 (1.1%)
+  58 generated (thinking + answer) | 41.0 tok/s | 31 prompt tokens
 >>> /save context-notes
 Conversation saved: /home/you/.local/share/chat/conversations/context-notes.json
 >>> /exit
@@ -48,6 +48,7 @@ The conversation was also auto-saved, so even without `/save` it can be found wi
 | set a system prompt, save, load or convert conversations | [Conversations](conversations.md) |
 | learn why only instruction-tuned models work | [Choosing a model](models.md) |
 | change the server URL, defaults, or what gets saved | [Configuration](configuration.md) |
-| understand the stats line and the context warning | [Statistics](statistics.md) |
+| understand the stats line, the context check and the warning | [Statistics](statistics.md) |
+| understand llama-server and which endpoints the app calls, and when | [llama-server API](llama-server-api.md) |
 | fix a problem | [Troubleshooting](troubleshooting.md) |
 | know how reasoning ("thinking") tags are handled | [Thinking tags](thinking-tags.md) |

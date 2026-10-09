@@ -59,9 +59,25 @@ class FakeStream:
             yield token
 
 
+class Session:
+    """What a run of main() left behind: the ordered log, the messages shown, the conversation."""
+
+    def __init__(self):
+        self.log, self.infos, self.errors, self.conversation, self.client = [], [], [], None, None
+        self.chat_calls = []
+
+
 def run_turn(tmp_path, chat_behaviour):
     """Run main() for one message, then EOF. Returns (log, the messages display_info was given)."""
-    log, infos = [], []
+    session = run_session(tmp_path, chat_behaviour)
+    return session.log, session.infos
+
+
+def run_session(tmp_path, chat_behaviour, inputs=("hello", None), check_fit=(100, 4096), config=None):
+    """Run main() over `inputs` (None is EOF). check_fit is what client.check_fit returns,
+    or an exception to raise from inside the check; a list gives one result per call."""
+    session = Session()
+    log, infos = session.log, session.infos
     rec = Recorder(log)
 
     def logged(name, real=None):
@@ -73,18 +89,38 @@ def run_turn(tmp_path, chat_behaviour):
 
     def client_chat(**kwargs):
         log.append(("chat", rec.active))
+        session.chat_calls.append(kwargs)
         return chat_behaviour()
+
+    def client_check(messages, model=None):
+        log.append(("check_fit", rec.active))
+        session.check_messages = messages
+        result = check_fit.pop(0) if isinstance(check_fit, list) else check_fit
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def display_error(msg):
+        session.errors.append(msg)
+        log.append(("display_error", rec.active))
+
+    def make_conversation(*args, **kwargs):
+        session.conversation = real_conversation(*args, **kwargs)
+        return session.conversation
 
     def display_info(msg):
         infos.append(msg)
         log.append(("display_info", rec.active))
 
-    inputs = iter(["hello", None])
+    inputs = iter(inputs)
     client = mock.Mock(server_model="/m/x.gguf", server_n_ctx=4096, think_tags=None)
     client.is_available.return_value = True
     client.chat.side_effect = client_chat
-    config = {**DEFAULTS, "conversations_dir": str(tmp_path)}
+    client.check_fit.side_effect = client_check
+    session.client = client
+    config = {**DEFAULTS, "conversations_dir": str(tmp_path), **(config or {})}
     real_print = chat.console.print
+    real_conversation = chat.Conversation
 
     with (
         mock.patch.object(chat, "load_config", return_value=config),
@@ -97,12 +133,13 @@ def run_turn(tmp_path, chat_behaviour):
         mock.patch.object(chat, "display_assistant_stream", logged("display", ui.display_assistant_stream)),
         mock.patch.object(chat, "display_stats", logged("stats", ui.display_stats)),
         mock.patch.object(chat, "_auto_save", logged("auto_save", chat._auto_save)),
-        mock.patch.object(chat, "display_error", logged("display_error")),
+        mock.patch.object(chat, "display_error", display_error),
+        mock.patch.object(chat, "Conversation", make_conversation),
         mock.patch.object(chat, "display_info", display_info),
         mock.patch.object(chat.console, "print", logged("print", real_print)),
     ):
         chat.main()
-    return log, infos
+    return session
 
 
 def check_shape(log):
@@ -124,10 +161,14 @@ class TestWhichSpanIsSuppressed:
     def test_a_normal_turn_is_suppressed_from_the_request_to_the_trailing_blank_line(self, tmp_path):
         log, infos = run_turn(tmp_path, lambda: FakeStream(["Hello ", "world"]))
         inside = check_shape(log)
-        for step in ("chat", "display", "stats", "auto_save"):
+        for step in ("check_fit", "chat", "display", "stats", "auto_save"):
             assert step in inside, (step, inside)
         assert (
-            inside.index("chat") < inside.index("display") < inside.index("stats") < inside.index("auto_save")
+            inside.index("check_fit")
+            < inside.index("chat")
+            < inside.index("display")
+            < inside.index("stats")
+            < inside.index("auto_save")
         )
         assert infos == []
 
@@ -164,3 +205,139 @@ class TestWhichSpanIsSuppressed:
         assert infos == []
         for step in ("chat", "display", "stats", "auto_save"):
             assert step in inside, (step, inside)
+
+
+def roles(conversation):
+    return [m["role"] for m in conversation.messages]
+
+
+class TestPreSendCheck:
+    """The token check runs inside the suppressed span, before the message joins the conversation."""
+
+    def test_a_prompt_that_does_not_fit_is_refused_and_nothing_is_sent_or_stored(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(5000, 4096))
+        inside = check_shape(session.log)
+        assert "check_fit" in inside and "chat" not in inside and "display_error" in inside
+        assert "5,000 tokens" in session.errors[0] and "4,096" in session.errors[0]
+        assert session.conversation.messages == []
+
+    def test_the_candidate_is_the_history_plus_the_new_message(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["r"]), inputs=("one", "two", None))
+        assert [m["content"] for m in session.check_messages] == ["one", "r", "two"]
+
+    def test_an_accepted_prompt_skips_the_second_refresh(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]))
+        assert session.chat_calls[0]["refreshed"] is True
+
+    def test_a_prompt_over_80_percent_is_sent_with_a_warning(self, tmp_path):
+        with mock.patch.object(chat, "display_context_warning") as warn:
+            session = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(3400, 4096))
+        warn.assert_called_once_with(3400, 4096)
+        assert roles(session.conversation) == ["user", "assistant"]
+
+    def test_a_prompt_at_80_percent_or_less_is_sent_without_one(self, tmp_path):
+        with mock.patch.object(chat, "display_context_warning") as warn:
+            run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(3276, 4096))
+        warn.assert_not_called()
+
+    def test_the_reserve_moves_the_boundary(self, tmp_path):
+        config = {"reserve_output_tokens": 1000}
+        refused = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(3100, 4096), config=config)
+        assert refused.conversation.messages == [] and "1,000 kept free" in refused.errors[0]
+        sent = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(3095, 4096), config=config)
+        assert roles(sent.conversation) == ["user", "assistant"]
+
+    def test_context_check_off_counts_nothing_refuses_nothing_warns_nothing(self, tmp_path):
+        with mock.patch.object(chat, "display_context_warning") as warn:
+            session = run_session(
+                tmp_path, lambda: FakeStream(["x"]), check_fit=(10**6, 4096), config={"context_check": False}
+            )
+        session.client.check_fit.assert_not_called()
+        warn.assert_not_called()
+        assert roles(session.conversation) == ["user", "assistant"]
+        assert session.chat_calls[0]["refreshed"] is False
+
+    def test_an_unknown_window_skips_the_check(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(10**6, None))
+        assert roles(session.conversation) == ["user", "assistant"]
+        assert session.errors == []
+
+    @pytest.mark.parametrize("failure", [ConnectionError("down"), HTTPError("500")])
+    def test_a_count_that_cannot_be_made_lets_the_send_meet_the_same_failure(self, tmp_path, failure):
+        def behaviour():
+            raise failure
+
+        session = run_session(tmp_path, behaviour, check_fit=failure)
+        # chat() was called and failed as it does without a check, taking the unanswered message back
+        assert len(session.chat_calls) == 1 and session.chat_calls[0]["refreshed"] is False
+        assert session.conversation.messages == []
+
+    def test_an_unreadable_token_count_lets_the_send_proceed_too(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=ValueError("not json"))
+        assert roles(session.conversation) == ["user", "assistant"] and session.errors == []
+
+    def test_a_count_that_cannot_be_made_on_a_later_turn_leaves_the_earlier_messages_intact(self, tmp_path):
+        replies = iter([FakeStream(["r"]), ConnectionError("down")])
+
+        def behaviour():
+            reply = next(replies)
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+
+        failure = ConnectionError("down")
+        session = run_session(
+            tmp_path, behaviour, inputs=("one", "two", None), check_fit=[(10, 4096), failure]
+        )
+        assert [m["content"] for m in session.conversation.messages] == ["one", "r"]
+
+    def test_ctrl_c_during_the_check_cancels_the_send_and_keeps_the_program_running(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=KeyboardInterrupt())
+        inside = check_shape(session.log)
+        assert "chat" not in inside and "Cancelled." in session.infos
+        assert session.conversation.messages == []
+
+
+class TestRefusedCommands:
+    def test_a_refused_retry_restores_the_removed_messages(self, tmp_path):
+        session = run_session(
+            tmp_path,
+            lambda: FakeStream(["reply"]),
+            inputs=("hello", "/retry", None),
+            check_fit=[(10, 4096), (5000, 4096)],
+        )
+        assert [m["content"] for m in session.conversation.messages] == ["hello", "reply"]
+        assert len(session.chat_calls) == 1 and len(session.errors) == 1
+
+    def test_an_accepted_retry_sends_again(self, tmp_path):
+        session = run_session(
+            tmp_path, lambda: FakeStream(["reply"]), inputs=("hello", "/retry", None), check_fit=(10, 4096)
+        )
+        assert [m["content"] for m in session.conversation.messages] == ["hello", "reply"]
+        assert len(session.chat_calls) == 2
+
+    def test_a_refused_read_leaves_the_conversation_unchanged(self, tmp_path, monkeypatch):
+        (tmp_path / "big.txt").write_text("lots of text")
+        monkeypatch.chdir(tmp_path)
+        session = run_session(
+            tmp_path,
+            lambda: FakeStream(["x"]),
+            inputs=("/read big.txt", None),
+            check_fit=(5000, 4096),
+        )
+        assert session.conversation.messages == [] and session.chat_calls == []
+        assert "5,000 tokens" in session.errors[0]
+
+    def test_the_prompt_size_is_shown_after_a_file_is_included(self, tmp_path, monkeypatch):
+        (tmp_path / "f.txt").write_text("some text")
+        monkeypatch.chdir(tmp_path)
+        with mock.patch.object(chat, "display_prompt_size") as shown:
+            run_session(
+                tmp_path, lambda: FakeStream(["x"]), inputs=("see @@<f.txt>", None), check_fit=(1000, 4096)
+            )
+        shown.assert_called_once_with(1000, 4096)
+
+    def test_no_prompt_size_without_an_included_file(self, tmp_path):
+        with mock.patch.object(chat, "display_prompt_size") as shown:
+            run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(1000, 4096))
+        shown.assert_not_called()

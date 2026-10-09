@@ -69,6 +69,11 @@ class FakeServer:
         self.bad_json = False
         self.props_calls = 0
         self.template_calls = []
+        self.tokenize_calls = []
+        # Set to a callable(messages) -> prompt to render real prompts like a template would
+        # (see words_template); /tokenize then counts one token per word, plus one for the BOS
+        # that add_special asks for. Left None, a real prompt is the fixed real_prompt.
+        self.render = None
 
     def become(self, model_path, source, cont, gen, real_prompt="<real>", n_ctx=4096):
         self.model_path, self.source, self.n_ctx = model_path, source, n_ctx
@@ -95,19 +100,30 @@ class FakeServer:
             # Like llama-server: only the final chunk names the model that produced the reply.
             final = f'data: {{"content": "", "stop": true, "model": "{self.model_path}"}}'
             return FakeResponse(lines=[b'data: {"content": "x", "stop": false}', final.encode()])
-        assert url.endswith("/apply-template"), url
-        self.template_calls.append(json)
         if self.fail:
             raise requests.ConnectionError("server down")
+        if url.endswith("/tokenize"):
+            self.tokenize_calls.append(json)
+            count = len(json["content"].split()) + (1 if json["add_special"] else 0)
+            return FakeResponse({"tokens": list(range(count))})
+        assert url.endswith("/apply-template"), url
+        self.template_calls.append(json)
         if json.get("continue_final_message"):
             return FakeResponse({"prompt": self.cont})
         messages = json["messages"]
         if len(messages) == 1 and messages[0]["content"] == U:
             return FakeResponse({"prompt": self.gen})
+        if self.render:
+            return FakeResponse({"prompt": self.render(messages)})
         return FakeResponse({"prompt": self.real_prompt})
 
     def patched(self):
         return mock.patch.multiple("requests", get=self.get, post=self.post)
+
+
+def words_template(messages):
+    """A stand-in chat template: a role marker word before each message, then the reply's marker."""
+    return " ".join(f"<{m['role']}> {m['content']}" for m in messages) + " <assistant>"
 
 
 def qwen_server():

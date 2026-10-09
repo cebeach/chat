@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+import chat
 import conv2txt
 import ui
 from chat import State, _prepare_user_message, build_message, expand_includes, handle_command
@@ -32,8 +33,8 @@ def cwd(tmp_path, monkeypatch):
     return tmp_path
 
 
-def expand(text, **config):
-    return expand_includes(text, {**DEFAULTS, **config})
+def expand(text):
+    return expand_includes(text)
 
 
 def make_state(tmp_path, **config):
@@ -119,11 +120,18 @@ class TestAborts:
         _, _, errors = expand("@@<one.txt> and @@<a.txt> and @@<two.txt>")
         assert [e.split(":")[0] for e in errors] == ["@@<one.txt>", "@@<two.txt>"]
 
-    def test_an_oversize_file_aborts(self, cwd):
+    def test_a_file_over_the_read_guard_aborts(self, cwd, monkeypatch):
+        """The fixed memory guard, not a context limit: that is the token check's job."""
+        monkeypatch.setattr(chat, "_READ_FILE_MAX_BYTES", 1024)
         (cwd / "big.txt").write_text("x" * 2048)
-        flat, _, errors = expand("@@<big.txt>", read_file_max_kb=1)
+        flat, _, errors = expand("@@<big.txt>")
         assert flat == ""
-        assert len(errors) == 1 and errors[0].startswith("@@<big.txt>: File too large")
+        assert errors == ["@@<big.txt>: File too large to read."]
+
+    def test_a_file_far_over_the_old_32_kb_limit_is_read(self, cwd):
+        (cwd / "long.txt").write_text("x" * 200_000)
+        flat, _, errors = expand("@@<long.txt>")
+        assert errors == [] and len(flat) == 200_000
 
     def test_an_unterminated_token_aborts(self, cwd):
         flat, _, errors = expand("see @@<a.txt and more")
@@ -176,7 +184,7 @@ class TestPrepareUserMessage:
         assert out == ""
 
     def _run(self, text, state):
-        self.result = _prepare_user_message(text, state)
+        self.result = _prepare_user_message(text)
 
 
 class TestReadCommand:
@@ -323,6 +331,6 @@ class TestDisplay:
 
 def test_build_message_keeps_the_order_of_files_only_segments(cwd):
     segments = [("file", "b.txt", "b.txt"), ("file", "a.txt", "a.txt")]
-    flat, includes, errors = build_message(segments, DEFAULTS)
+    flat, includes, errors = build_message(segments)
     assert (flat, errors) == ("BETA\n\nALPHA", [])
     assert [i["typed"] for i in includes] == ["b.txt", "a.txt"]

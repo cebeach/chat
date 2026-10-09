@@ -20,6 +20,11 @@ and start the app again.
 The server stopped or rejected the request during a reply. Your last message is removed
 from the conversation, so you can send it again once the server is back.
 
+A `llama-server error: 400` can mean the prompt was larger than the context window. The app
+normally catches that first ("Not sent: the prompt would be N tokens…", below). The server's
+own error appears instead when `context_check` is off, or when the app could not count the
+prompt (see [statistics](statistics.md#when-the-count-cannot-be-made)).
+
 ## The model changed
 Each turn the app asks the server which model it is serving. If you restarted the
 server with a different model, one line (`model: old → new (context N tokens)`) is
@@ -37,9 +42,15 @@ The conversation may have outgrown the context window. See
 file. Files saved by earlier versions keep their reasoning inline in `content` and cannot be
 split. See [thinking-tags.md](thinking-tags.md).
 
-## "File too large (N KB max)" / "File not found."
-`/read`, `@@<path>` and `/system <file>` refuse files above `read_file_max_kb` (default 32).
-Raise it in the config file, or split the file. Paths with spaces need quotes for
+## "Not sent: the prompt would be N tokens but the context window is M"
+The prompt (system prompt, the conversation so far and the new message) does not fit the
+server's context window, so nothing was sent and the conversation is unchanged. Shorten the
+message or the included file, free space with `/clear` (`/save` first), or restart
+llama-server with a larger `-c`. See [statistics](statistics.md#the-pre-send-check). A file
+over 8 MB is refused earlier with "File too large to read."
+
+## "File not found."
+Paths with spaces need quotes for
 `/read`; inside `@@<...>` they need none. When an `@@<path>` or `/read` file cannot be
 read, the whole message is not sent and the error names the file.
 
