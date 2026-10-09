@@ -152,3 +152,25 @@ def test_thinking_is_generated_but_not_part_of_the_next_prompt(llama_server, lla
     counts = tokens.breakdown(llama_client, conv, model=llama_client.server_model)
     assert counts["assistant"] == llama_client.count_tokens(answer, add_special=False)
     assert stream.stats["completion_tokens"] > counts["assistant"]
+
+
+def test_a_reply_that_runs_out_of_window_is_flagged_truncated(llama_client):
+    """A prompt that leaves room for only a few tokens: the server stops the reply and says so."""
+    text = text_with_prompt_tokens(llama_client, WINDOW - 10, prefix="Repeat the word 'word' forever. ")
+    stream = llama_client.chat(
+        llama_client.server_model, user(text), {"seed": 1, "temperature": 0}, refreshed=False
+    )
+    "".join(stream)
+    stats = stream.stats
+    assert stream.truncated is True
+    assert stats["prompt_tokens"] + stats["completion_tokens"] >= WINDOW - 2
+
+
+def test_a_reply_stopped_by_a_token_limit_is_not_flagged_truncated(llama_client):
+    """n_predict also ends a reply early (stop_type limit), but the window did not fill."""
+    stream = llama_client.chat(
+        llama_client.server_model, user("Count from 1 to 100, one number per line."), OPTIONS
+    )
+    "".join(stream)
+    assert stream.stats["completion_tokens"] == OPTIONS["n_predict"]
+    assert stream.truncated is False

@@ -335,6 +335,12 @@ class LlamaChatStream:
     done), eval_duration_ns and (when reported) tokens_per_second, taken from the
     server's final chunk. It stays empty if the stream ends without one.
 
+    truncated is True when that final chunk says the context window filled up
+    while the reply was being written (the server then stops it early; this is
+    not an error). It stays False for a reply that ended any other way, including
+    one that reached a token limit, and for a stream interrupted before the
+    final chunk.
+
     prefix is yielded first (the opening thinking tag the template put in the
     prompt). think_tags is the (start, end, source) used for this request, or
     None; server_model and server_n_ctx are what the server reported for it
@@ -345,6 +351,7 @@ class LlamaChatStream:
         self._response = response
         self._prefix = prefix
         self.stats = {}
+        self.truncated = False
         self.think_tags = None
         self.server_model = None
         self.server_n_ctx = None
@@ -370,6 +377,7 @@ class LlamaChatStream:
                 yield token
             if data.get("stop"):
                 self.model = data.get("model")
+                self.truncated = data.get("truncated") is True
                 self._build_stats(data)
                 return
 

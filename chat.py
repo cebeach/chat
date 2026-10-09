@@ -31,6 +31,7 @@ from ui import (
     display_options,
     display_prompt_size,
     display_stats,
+    display_truncated_warning,
     echo_suppressed,
     get_multiline_input,
     get_user_input,
@@ -718,6 +719,8 @@ def main():
                         _update_think_tags(state, chat_stream.think_tags)
                         response = display_assistant_stream(chat_stream, think_end=_think_end(state))
                         _store_reply(conversation, response, chat_stream, state)
+                        if chat_stream.truncated:
+                            display_truncated_warning(not conversation.messages[-1]["content"])
                         if state.show_stats:
                             display_stats(chat_stream.stats)
                         _auto_save(conversation, state)

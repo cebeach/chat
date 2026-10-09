@@ -200,10 +200,10 @@ word. The last object (`"stop": true`) carries the totals. AI Chat reads:
 | `tokens_evaluated` | "N prompt tokens": the whole prompt, cached part included |
 | `timings.predicted_per_second` | "N tok/s" |
 
-The same last object also has `truncated` and `stop_type`, which say whether the reply was
-cut short because the context window filled up. The app does not read them, so a reply that
-ran out of room looks like a finished one. See
-[statistics](statistics.md#the-pre-send-check).
+The same last object also has `truncated`, which is true when the reply was stopped because
+the context window filled up, and `stop_type`. The app reads `truncated` (not `stop_type`,
+which is also `limit` when a token limit was reached) and prints a warning after the reply;
+see [statistics](statistics.md#a-reply-that-was-cut-off).
 
 Ctrl-C while a reply is streaming makes the app stop reading the stream; the part received
 so far is kept in the conversation and the app returns to the prompt.

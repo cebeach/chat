@@ -42,8 +42,8 @@ class Recorder:
 
 
 class FakeStream:
-    def __init__(self, tokens, interrupt_after=None, stats=None):
-        self.tokens, self.interrupt_after = tokens, interrupt_after
+    def __init__(self, tokens, interrupt_after=None, stats=None, truncated=False):
+        self.tokens, self.interrupt_after, self.truncated = tokens, interrupt_after, truncated
         self.stats = {"completion_tokens": 1} if stats is None else stats
         self.server_model, self.server_n_ctx, self.think_tags, self.model = (
             "/m/x.gguf",
@@ -132,6 +132,9 @@ def run_session(tmp_path, chat_behaviour, inputs=("hello", None), check_fit=(100
         mock.patch.object(chat, "get_user_input", logged("get_user_input", lambda: next(inputs))),
         mock.patch.object(chat, "display_assistant_stream", logged("display", ui.display_assistant_stream)),
         mock.patch.object(chat, "display_stats", logged("stats", ui.display_stats)),
+        mock.patch.object(
+            chat, "display_truncated_warning", logged("truncated_warning", ui.display_truncated_warning)
+        ),
         mock.patch.object(chat, "_auto_save", logged("auto_save", chat._auto_save)),
         mock.patch.object(chat, "display_error", display_error),
         mock.patch.object(chat, "Conversation", make_conversation),
@@ -341,3 +344,38 @@ class TestRefusedCommands:
         with mock.patch.object(chat, "display_prompt_size") as shown:
             run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(1000, 4096))
         shown.assert_not_called()
+
+
+class TestTruncatedReply:
+    """A reply the server stopped because the context window filled is flagged, not shown as finished."""
+
+    def test_the_warning_follows_the_reply_inside_the_suppressed_span(self, tmp_path):
+        log, _ = run_turn(tmp_path, lambda: FakeStream(["Half a sentence"], truncated=True))
+        inside = check_shape(log)
+        assert "truncated_warning" in inside
+        assert inside.index("display") < inside.index("truncated_warning") < inside.index("auto_save")
+
+    def test_no_warning_for_a_reply_that_finished(self, tmp_path):
+        log, _ = run_turn(tmp_path, lambda: FakeStream(["Done."]))
+        assert "truncated_warning" not in [n for n, _ in log]
+
+    def test_the_reply_is_still_stored(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["Half a sentence"], truncated=True))
+        assert [m["content"] for m in session.conversation.messages] == ["hello", "Half a sentence"]
+
+    def test_it_says_when_nothing_of_the_answer_was_written(self, tmp_path, capsys):
+        def cut_off_while_thinking():
+            stream = FakeStream(["<think>still working it out"], truncated=True)
+            stream.think_tags = ("<think>", "</think>", "detected")
+            return stream
+
+        session = run_session(tmp_path, cut_off_while_thinking)
+        out = " ".join(capsys.readouterr().out.split())
+        assert "cut off because the context window is full" in out
+        assert "still thinking, so there is no answer" in out
+        assert session.conversation.messages[-1]["content"] == ""
+
+    def test_an_ordinary_cut_off_reply_does_not_claim_the_answer_is_missing(self, tmp_path, capsys):
+        run_session(tmp_path, lambda: FakeStream(["Half a sentence"], truncated=True))
+        out = " ".join(capsys.readouterr().out.split())
+        assert "cut off because the context window is full" in out and "no answer" not in out

@@ -213,3 +213,35 @@ class TestClient:
         assert list(self._stream_for_prompt("<|im_start|>assistant\n")) == ["x"]
         # A closed block earlier in the prompt (e.g. history) is not an opening tag.
         assert list(self._stream_for_prompt("<think>a</think>\nassistant\n")) == ["x"]
+
+
+class TestTruncated:
+    """The final chunk's `truncated` flag: the context window filled while the reply was written."""
+
+    def run(self, final):
+        stream = LlamaChatStream(
+            FakeResponse(lines=[sse(content="Hi", stop=False), sse(content="", stop=True, **final)])
+        )
+        assert "".join(stream) == "Hi"
+        return stream
+
+    def test_false_until_the_final_chunk_says_otherwise(self):
+        assert LlamaChatStream(FakeResponse()).truncated is False
+
+    def test_true_when_the_server_reports_it(self):
+        assert self.run({"truncated": True, "stop_type": "limit"}).truncated is True
+
+    def test_false_for_a_normal_end_or_a_missing_field(self):
+        assert self.run({"truncated": False, "stop_type": "eos"}).truncated is False
+        assert self.run({}).truncated is False
+
+    def test_a_token_limit_is_not_a_full_window(self):
+        """stop_type "limit" is also what n_predict produces; only `truncated` means the window."""
+        assert self.run({"truncated": False, "stop_type": "limit"}).truncated is False
+
+    def test_a_stream_cut_before_the_final_chunk_is_not_flagged(self):
+        stream = LlamaChatStream(FakeResponse(lines=[sse(content="Hi", stop=False)]))
+        assert "".join(stream) == "Hi" and stream.truncated is False
+
+    def test_anything_but_a_real_true_does_not_count(self):
+        assert self.run({"truncated": "yes"}).truncated is False

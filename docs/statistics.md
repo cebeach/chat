@@ -39,11 +39,29 @@ reports at that moment:
 would not fit is refused and the old one stays.
 
 What the check cannot do: it only knows the prompt. A reply that outgrows the window
-while it is being written ends early, as if it had finished (llama-server stops it when
-no room is left; it is not an error). That is what the 80% warning is for, and the
-optional `reserve_output_tokens` setting, which keeps that many tokens free when deciding
-whether a prompt fits. It is a margin, not a guarantee, because the length of a reply
-(especially a thinking model's) cannot be known in advance.
+while it is being written is stopped early by llama-server (when no room is left; it is not
+an error). The 80% warning and the optional `reserve_output_tokens` setting, which keeps
+that many tokens free when deciding whether a prompt fits, make that less likely. They are a
+margin, not a guarantee, because the length of a reply (especially a thinking model's)
+cannot be known in advance.
+
+### A reply that was cut off
+When it happens anyway, the server says so in its last message and the app prints a warning
+after the reply:
+
+```
+Warning: the reply was cut off because the context window is full. Free space with /clear, or restart llama-server with a larger -c.
+```
+
+The partial reply is kept and saved like any other. A thinking model can be cut off while it
+is still thinking; the warning then adds "The model was still thinking, so there is no
+answer." Such a reply is stored with thinking only, and a reply with no answer is left out,
+together with your message before it, when the conversation is sent again, so the model
+will not see that exchange. After restarting the server with a larger `-c`, `/retry` asks
+again; after `/clear` the conversation is empty, so send the message again.
+
+A reply that stops because the server was started with a token limit (`--n-predict`) is not
+this: the window did not fill, and no warning is shown.
 
 Settings (see [configuration](configuration.md)):
 
