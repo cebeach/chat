@@ -20,6 +20,11 @@ and start the app again.
 The server stopped or rejected the request during a reply. Your last message is removed
 from the conversation, so you can send it again once the server is back.
 
+A `llama-server error: 400` can mean the prompt was larger than the context window. The app
+normally catches that first ("Not sent: the prompt would be N tokens…", below). The server's
+own error appears instead when `context_check` is off, or when the app could not count the
+prompt (see [statistics](statistics.md#when-the-count-cannot-be-made)).
+
 ## The model changed
 Each turn the app asks the server which model it is serving. If you restarted the
 server with a different model, one line (`model: old → new (context N tokens)`) is

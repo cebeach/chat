@@ -93,7 +93,9 @@ into the model's context window. `Pair n out of range (1-N)` if there is no such
 ## /retry
 Removes the last reply (including one you interrupted with Ctrl-C) and sends your
 last message again. Needs a conversation that ends with an assistant reply, otherwise
-`Nothing to retry` or `Last message is not an assistant response.`
+`Nothing to retry` or `Last message is not an assistant response.` If the prompt would
+not fit the context window, nothing is sent and the reply it would have replaced is kept
+(see [statistics](statistics.md#the-pre-send-check)).
 
 ## /save [name]
 Writes the conversation to `<conversations_dir>/<name>.json`. With no name the file

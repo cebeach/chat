@@ -56,13 +56,17 @@ Files over 8 MB are refused before any counting ("File too large to read.").
 
 ### When the count cannot be made
 If the server cannot be reached, answers the counting calls with an error, or reports no
-window size, the check is skipped without a message and the send goes ahead. The send then
+window size, no count can be made, so there is nothing to refuse or warn about: no message
+is shown and the send goes ahead. The send then
 meets the same problem and reports it as it always has: "Lost connection to
 llama-server" or `llama-server error: ...`, and the unanswered message is taken back out of
 the conversation. A failed count therefore never blocks a send that would have worked. The
 cost is that if the prompt really was too large, you get the server's own error (an HTTP
 400) instead of the "Not sent" message above, and that error shows only the HTTP status,
 not the server's explanation.
+
+Ctrl-C while the count is being made cancels that message: "Cancelled." is printed, nothing
+is sent or stored, and the app returns to the prompt.
 
 ## How the count works
 The app does not estimate: it asks llama-server, which has the model's own chat template and

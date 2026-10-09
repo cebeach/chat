@@ -72,7 +72,7 @@ and render them internally, which hides all of that.
 |---|---|---|---|
 | `GET /health` | Says whether the server is ready | Once, at startup | To fail early with a clear message when no server is running |
 | `GET /props` | Server properties: the model, the context window, the chat template | At startup, before every message is sent, and for `/config` and `/info` | To follow the server: a restart with another model or `-c` is noticed. The window size feeds the [token check](statistics.md#the-pre-send-check) |
-| `POST /apply-template` | Renders messages with the model's chat template into prompt text, without generating anything | Twice per message (once to count, once for the real request); on `/info` and `/system`; and when a new model is first seen | To build the exact prompt the model will see, and to detect the model's thinking tags |
+| `POST /apply-template` | Renders messages with the model's chat template into prompt text, without generating anything | Twice per message with the token check on (once to count, once for the real request), once with it off; on `/info` and `/system`; and when a new model is first seen | To build the exact prompt the model will see, and to detect the model's thinking tags |
 | `POST /tokenize` | Turns text into tokens | Once per message to count the prompt; several times for `/info` | To measure a prompt exactly before it is sent |
 | `POST /completion` | Generates the reply, streamed token by token | Once per message, after the checks pass | The model's answer |
 
@@ -221,10 +221,15 @@ so far is kept in the conversation and the app returns to the prompt.
    thinking-tag probes (`POST /apply-template`) run here.
 2. `POST /apply-template`, then `POST /tokenize`: render and count the prompt. If it cannot
    fit, the app stops here and nothing is sent ([details](statistics.md#the-pre-send-check)).
+   If the count cannot be made (a request in this step fails), the app goes on to step 3
+   without a verdict, and the send reports any real problem itself.
 3. `POST /apply-template`: render the prompt for the real request.
 4. `POST /completion`: stream the reply.
 
-With `context_check = false`, step 2 and the second `/props` read are skipped.
+With `context_check = false` there is no step 2, and the `/props` read of step 1 is made by
+the send itself (step 4) instead, so the server is still read once per message. With the
+check on, that read is made once, in step 1, and the send does not repeat it. Ctrl-C during
+step 2 cancels the message with "Cancelled."
 
 **For commands**
 - `/config` reads `/props` so the model, window and tags it shows are current.

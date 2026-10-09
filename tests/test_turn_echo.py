@@ -263,7 +263,7 @@ class TestPreSendCheck:
         assert session.errors == []
 
     @pytest.mark.parametrize("failure", [ConnectionError("down"), HTTPError("500")])
-    def test_a_failing_check_is_skipped_and_the_send_meets_the_same_failure(self, tmp_path, failure):
+    def test_a_count_that_cannot_be_made_lets_the_send_meet_the_same_failure(self, tmp_path, failure):
         def behaviour():
             raise failure
 
@@ -272,11 +272,11 @@ class TestPreSendCheck:
         assert len(session.chat_calls) == 1 and session.chat_calls[0]["refreshed"] is False
         assert session.conversation.messages == []
 
-    def test_an_unreadable_token_count_is_skipped_too(self, tmp_path):
+    def test_an_unreadable_token_count_lets_the_send_proceed_too(self, tmp_path):
         session = run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=ValueError("not json"))
         assert roles(session.conversation) == ["user", "assistant"] and session.errors == []
 
-    def test_a_failure_on_a_later_turn_leaves_the_earlier_messages_intact(self, tmp_path):
+    def test_a_count_that_cannot_be_made_on_a_later_turn_leaves_the_earlier_messages_intact(self, tmp_path):
         replies = iter([FakeStream(["r"]), ConnectionError("down")])
 
         def behaviour():
