@@ -716,12 +716,21 @@ class FakeConfig:
         return self.option
 
 
+class FakeDefinition:
+    def __init__(self, marks):
+        self.marks = marks
+
+    def iter_markers(self, name):
+        return iter([m for m in self.marks if m.name == name])
+
+
 class FakeMetafunc:
     """Just enough of pytest's Metafunc to see what the hook parametrizes."""
 
-    def __init__(self, fixturenames, option=None):
+    def __init__(self, fixturenames, option=None, marks=()):
         self.fixturenames = fixturenames
         self.config = FakeConfig(option)
+        self.definition = FakeDefinition(marks)
         self.calls = []
 
     def parametrize(self, argnames, argvalues, **kwargs):
@@ -738,10 +747,10 @@ class TestGenerateTests:
         monkeypatch.delenv("LLAMA_TEST_MODEL", raising=False)
 
     @staticmethod
-    def run(fixturenames, option=None):
+    def run(fixturenames, option=None, marks=()):
         from tests import conftest as conftest_mod
 
-        metafunc = FakeMetafunc(fixturenames, option)
+        metafunc = FakeMetafunc(fixturenames, option, marks)
         conftest_mod.pytest_generate_tests(metafunc)
         return metafunc, conftest_mod
 
@@ -771,6 +780,27 @@ class TestGenerateTests:
         monkeypatch.setenv("LLAMA_TEST_MODEL", "all")
         assert [c[1] for c in self.run(["llama_server"])[0].calls] == [["alpha", "beta"]]
 
+    def test_llama_args_marker_parametrizes_with_the_extras_and_an_id(self):
+        marks = [pytest.mark.llama_args("--ctx-size 2048", "--temp 0").mark]
+        metafunc, _ = self.run(["llama_server"], "all", marks)
+        ((argnames, values, kwargs),) = metafunc.calls
+        assert [(v.values[0], v.id) for v in values] == [
+            (("alpha", ("--ctx-size 2048", "--temp 0")), "alpha+ctx-size-2048+temp-0"),
+            (("beta", ("--ctx-size 2048", "--temp 0")), "beta+ctx-size-2048+temp-0"),
+        ]
+        assert kwargs == {"indirect": True, "scope": "session"}
+
+    def test_equal_extras_are_equal_params_so_pytest_shares_one_server(self):
+        marks = [pytest.mark.llama_args("--ctx-size 2048").mark]
+        first = self.run(["llama_server"], None, marks)[0].calls[0][1][0].values[0]
+        second = self.run(["llama_server"], None, marks)[0].calls[0][1][0].values[0]
+        assert first == second and hash(first) == hash(second)
+
+    def test_a_marker_does_not_hide_a_configuration_error(self):
+        marks = [pytest.mark.llama_args("--ctx-size 2048").mark]
+        metafunc, conftest_mod = self.run(["llama_server"], "nope", marks)
+        assert [call[1] for call in metafunc.calls] == [[conftest_mod.CONFIG_ERROR_ID]]
+
     def test_a_bad_selection_is_raised_when_the_server_is_needed_not_while_collecting(self):
         metafunc, conftest_mod = self.run(["llama_server"], "nope")
         assert [call[1] for call in metafunc.calls] == [[conftest_mod.CONFIG_ERROR_ID]]
@@ -785,6 +815,68 @@ class TestGenerateTests:
         metafunc, conftest_mod = self.run(["llama_server"])
         assert [call[1] for call in metafunc.calls] == [[conftest_mod.CONFIG_ERROR_ID]]
         assert "not valid TOML" in str(metafunc.config.stash[conftest_mod.CONFIG_ERROR])
+
+
+class TestExtraArgs:
+    """The llama_args marker: a test's flags merged over the profile's args."""
+
+    def argv(self, files, extra, name="alpha"):
+        profile = cfg.with_extra_args(cfg.select_profile(load(files), name), extra)
+        return cfg.build_argv(profile, files["models"], port=9999)
+
+    def test_the_same_spelling_replaces_the_profiles_flag(self, files):
+        argv = self.argv(files, ["--ctx-size 2048"])
+        assert "--ctx-size" in argv and argv[argv.index("--ctx-size") + 1] == "2048"
+        assert argv.count("--ctx-size") == 1 and "8192" not in argv
+
+    def test_an_alias_does_not_replace_so_both_reach_the_server(self, files):
+        argv = self.argv(files, ["-c 2048"])
+        assert argv.count("--ctx-size") == 1 and "-c" in argv
+
+    def test_a_new_flag_is_added_and_the_rest_is_kept(self, files):
+        argv = self.argv(files, ["--top-k 1"], name="beta")
+        assert ["--top-k", "1"] == argv[argv.index("--top-k") : argv.index("--top-k") + 2]
+        assert "--no-webui" in argv
+
+    def test_no_extras_is_the_same_profile(self, files):
+        profile = cfg.select_profile(load(files), "alpha")
+        assert cfg.with_extra_args(profile, ()) is profile
+
+    def test_the_profile_itself_is_not_changed(self, files):
+        profile = cfg.select_profile(load(files), "alpha")
+        before = list(profile.args)
+        cfg.with_extra_args(profile, ["--ctx-size 2048"])
+        assert profile.args == before
+
+    @pytest.mark.parametrize("flag", ["-m x.gguf", "--model x.gguf", "--host 0.0.0.0", "--port 9"])
+    def test_reserved_flags_are_refused(self, files, flag):
+        with pytest.raises(LlamaTestConfigError, match="llama_args"):
+            self.argv(files, [flag])
+
+    def test_a_value_without_a_flag_is_refused(self, files):
+        with pytest.raises(LlamaTestConfigError, match="does not start with a flag"):
+            self.argv(files, ["ctx-size 2048"])
+
+    def test_resolve_setup_applies_the_extras(self, files):
+        files["models"].joinpath("alpha.gguf").write_bytes(b"")
+        exe = files["models"] / "llama-server"
+        exe.write_text("")
+        exe.chmod(0o755)
+        files["local"].write_text(f'models_dir = "{files["models"]}"\nbinary = "{exe}"\n')
+        setup = cfg.resolve_setup(
+            "alpha",
+            {},
+            committed_path=files["committed"],
+            local_path=files["local"],
+            template_dir=files["templates"],
+            extra_args=("--ctx-size 2048",),
+        )
+        argv = cfg.build_argv(setup.profile, setup.models_dir, port=9999)
+        assert argv[argv.index("--ctx-size") + 1] == "2048"
+
+    def test_ids(self):
+        assert cfg.extras_id(("--ctx-size 2048",)) == "ctx-size-2048"
+        assert cfg.extras_id(("-c 2048", "--no-warmup")) == "c-2048+no-warmup"
 
 
 class TestCommittedConfig:
@@ -815,3 +907,13 @@ def test_server_smoke(llama_server, llama_client):
     if profile.chat_template_path:
         served = requests.get(f"{llama_server.url}/props", timeout=10).json()["chat_template"]
         assert served.strip() == profile.chat_template_path.read_text().strip()
+
+
+@pytest.mark.integration
+@pytest.mark.llama_args("--ctx-size 2048")
+def test_llama_args_marker_changes_the_real_servers_context(llama_server, llama_client):
+    """The marker reaches the real llama-server: n_ctx is 2048 whatever the profile's own value is."""
+    assert llama_client.server_n_ctx == 2048
+    assert llama_server.extra_args == ("--ctx-size 2048",)
+    assert llama_server.argv.count("--ctx-size") == 1
+    assert llama_server.argv[llama_server.argv.index("--ctx-size") + 1] == "2048"
