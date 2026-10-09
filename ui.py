@@ -383,6 +383,20 @@ def display_context_warning(used, limit):
     console.print(f"[warning]Warning: context window {pct:.0f}% full ({used:,} / {limit:,} tokens)[/warning]")
 
 
+def display_truncated_warning(answer_missing=False):
+    """Warn that the reply was stopped because the context window filled up.
+
+    answer_missing: the reply was still inside its thinking block, so nothing of the
+    answer was written (and the exchange will not be sent with later messages).
+    """
+    msg = "Warning: the reply was cut off because the context window is full."
+    if answer_missing:
+        msg += " The model was still thinking, so there is no answer."
+    console.print(
+        f"[warning]{msg} Free space with /clear, or restart llama-server with a larger -c.[/warning]"
+    )
+
+
 def display_prompt_size(needed, n_ctx):
     """A dim line with the size of the prompt about to be sent, after a file was included."""
     console.print(
