@@ -50,7 +50,6 @@ class Profile:
     args: list = field(default_factory=list)  # defaults merged under the profile's; one token tuple per flag
     chat_template: str | None = None
     chat_template_path: Path | None = None
-    vram_mb: int | None = None
     startup_timeout: float | None = None
     # The thinking tags this model is expected to use, as observed on the real model:
     # None = not recorded, () = the model does not think, (start, end) = a thinking model.
@@ -70,7 +69,6 @@ class LocalConfig:
     models_dir: str | None = None
     binary: str | None = None
     startup_timeout: float | None = None
-    budget_vram_mb: int | None = None
 
 
 @dataclass
@@ -98,12 +96,6 @@ def _check_keys(table, allowed, where):
         raise LlamaTestConfigError(
             f"unknown key {unknown[0]!r} in {where} (allowed: {', '.join(sorted(allowed))})"
         )
-
-
-def _positive_int(value, where):
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise LlamaTestConfigError(f"{where} must be a positive integer, got {value!r}")
-    return value
 
 
 def _positive_number(value, where):
@@ -268,7 +260,6 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
                 "args",
                 "remove",
                 "chat_template",
-                "vram_mb",
                 "startup_timeout",
                 "think_tags",
                 "source_url",
@@ -282,8 +273,6 @@ def load_config(path=COMMITTED_CONFIG, template_dir=TEMPLATE_DIR):
         removed = _parse_remove(table.get("remove", []), f"remove in {where}", default_names)
 
         profile = Profile(name=name, file=file, args=_merge(default_args, own_args, removed))
-        if "vram_mb" in table:
-            profile.vram_mb = _positive_int(table["vram_mb"], f"vram_mb in {where}")
         if "startup_timeout" in table:
             profile.startup_timeout = _positive_number(
                 table["startup_timeout"], f"startup_timeout in {where}"
@@ -356,7 +345,7 @@ def load_local(path=LOCAL_CONFIG):
         return LocalConfig()
     raw = _read_toml(path, "local config")
     where_file = Path(path).name
-    _check_keys(raw, {"models_dir", "binary", "startup_timeout", "budget"}, where_file)
+    _check_keys(raw, {"models_dir", "binary", "startup_timeout"}, where_file)
     local = LocalConfig()
     for key in ("models_dir", "binary"):
         if key in raw:
@@ -365,13 +354,6 @@ def load_local(path=LOCAL_CONFIG):
             setattr(local, key, raw[key])
     if "startup_timeout" in raw:
         local.startup_timeout = _positive_number(raw["startup_timeout"], f"startup_timeout in {where_file}")
-    if "budget" in raw:
-        budget = raw["budget"]
-        if not isinstance(budget, dict):
-            raise LlamaTestConfigError(f"[budget] in {where_file} must be a table")
-        _check_keys(budget, {"vram_mb"}, f"[budget] in {where_file}")
-        if "vram_mb" in budget:
-            local.budget_vram_mb = _positive_int(budget["vram_mb"], f"vram_mb in [budget] in {where_file}")
     return local
 
 

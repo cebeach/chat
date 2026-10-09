@@ -35,7 +35,6 @@ args = [
 
 [models.alpha]
 file = "alpha.gguf"
-vram_mb = 100
 args = [
     "--ctx-size 8192",
     "--temp 0.5",
@@ -212,7 +211,6 @@ class TestLoadConfig:
     def test_parses_profiles_in_file_order(self, files):
         config = load(files)
         assert list(config.profiles) == ["alpha", "beta"]
-        assert config.profiles["alpha"].vram_mb == 100
         assert config.profiles["beta"].startup_timeout == 30
         assert config.profiles["beta"].chat_template_path == files["templates"] / "beta.jinja"
 
@@ -224,10 +222,8 @@ class TestLoadConfig:
             ('[models.a]\nfile = "a"\nchat_templat = "x"\n', "unknown key 'chat_templat'"),
             ("", "no profiles defined"),
             ("[models]\n", "no profiles defined"),
-            ("[models.a]\nvram_mb = 5\n", "needs a `file`"),
-            ('[models.a]\nfile = "a"\nvram_mb = 0\n', "positive integer"),
-            ('[models.a]\nfile = "a"\nvram_mb = 1.5\n', "positive integer"),
-            ('[models.a]\nfile = "a"\nvram_mb = true\n', "positive integer"),
+            ("[models.a]\nargs = []\n", "needs a `file`"),
+            ('[models.a]\nfile = "a"\nvram_mb = 5\n', "unknown key 'vram_mb'"),
             ('[models.a]\nfile = "a"\nstartup_timeout = -1\n', "positive number"),
             ('[models.a]\nfile = "a"\nchat_template = "../x.jinja"\n', "plain filename"),
             ('[models.a]\nfile = "a"\nchat_template = "missing.jinja"\n', "does not exist"),
@@ -336,13 +332,6 @@ class TestLoadConfig:
         with pytest.raises(LlamaTestConfigError, match="not found"):
             cfg.load_config(files["committed"].parent / "nope.toml", files["templates"])
 
-    def test_vram_budget_is_not_compared(self, files):
-        files["local"].write_text("[budget]\nvram_mb = 10\n")
-        setup = resolve(
-            files, {"LLAMA_TEST_MODEL_DIR": str(files["models"]), "PATH": _path_with_llama(files)}
-        )
-        assert setup.profile.vram_mb == 100  # larger than the budget, and not an error
-
 
 class TestSelectProfile:
     def test_named_first_unknown_and_empty(self, files):
@@ -441,14 +430,13 @@ class TestResolveSetup:
     def test_local_file_keys(self, files):
         for text, match in [
             ("bogus = 1\n", "unknown key 'bogus'"),
-            ("[budget]\nvram = 1\n", "unknown key 'vram'"),
+            ("[budget]\nvram_mb = 24000\n", "unknown key 'budget'"),
             ("startup_timeout = 0\n", "positive number"),
-            ("[budget]\nvram_mb = 0\n", "positive integer"),
         ]:
             files["local"].write_text(text)
             with pytest.raises(LlamaTestConfigError, match=match):
                 resolve(files, {})
-        files["local"].write_text("[budget]\nvram_mb = 24000\n")  # valid, and optional files are fine
+        files["local"].write_text("startup_timeout = 30\n")  # valid, and optional files are fine
         with pytest.raises(NotConfigured):
             resolve(files, {})
 
