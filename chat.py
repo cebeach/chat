@@ -2,6 +2,7 @@
 """AI Chat — a terminal chat application powered by the llama.cpp server."""
 
 import argparse
+import copy
 import math
 from pathlib import Path
 import re
@@ -13,7 +14,8 @@ from datetime import datetime
 from requests.exceptions import ConnectionError, HTTPError, RequestException
 from rich.markup import escape
 
-from config import load_config
+import projects
+from config import apply_project, load_config
 from conversation import Conversation, split_think
 import tokens
 from llama_client import LlamaClient, ThinkTagsError
@@ -29,7 +31,9 @@ from ui import (
     display_error,
     display_included_files,
     display_info,
+    display_notes_heavy,
     display_options,
+    display_projects,
     display_prompt_size,
     format_option,
     format_server_option,
@@ -58,6 +62,16 @@ class State:
     pending_includes: list = field(default_factory=list)
     # Active thinking tags as (start, end, source), or None. See docs/thinking-tags.md.
     think_tags: tuple | None = None
+    # The active project (None: no project; behavior is as without the feature).
+    project: str | None = None
+    project_dir: Path | None = None
+    # The project's system prompt and where it came from, kept so /load can restore them.
+    project_prompt: str = ""
+    project_source_file: str | None = None
+    # The config.toml values; state.config is these plus the active project's settings.
+    global_config: dict = field(default_factory=dict)
+    # Digest of the project.md text the conversation currently carries.
+    notes_digest: str = ""
 
 
 def parse_args():
@@ -66,6 +80,11 @@ def parse_args():
         "--url",
         default=None,
         help="Override llama-server URL",
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Start in this project (see /project)",
     )
     return parser.parse_args()
 
@@ -111,8 +130,10 @@ def _validated(key, value):
     return value
 
 
-def _initial_options(config):
-    """The session's overrides from config.toml: only the keys that are set and valid.
+def _initial_options(config, source="config.toml", quiet=False):
+    """The session's overrides from `config`: only the keys that are set and valid.
+
+    source names the file in an error message; quiet suppresses it.
 
     State.options holds nothing else. /props reports the server's launch defaults but
     never what a request sent, so the app must remember what it sends; every other
@@ -125,7 +146,8 @@ def _initial_options(config):
         try:
             options[key] = _validated(key, config[key])
         except ValueError as exc:
-            display_error(f"config.toml: {key} {exc}; ignored.")
+            if not quiet:
+                display_error(f"{source}: {key} {exc}; ignored.")
     return options
 
 
@@ -351,7 +373,8 @@ def _handle_config(args, state, client=None):
     if not args.strip():
         server = client.sampling_defaults() if client is not None else None
         rows = option_rows(_OPTION_KEYS, server, state.options)
-        display_config(state.config, state.model, rows, state.think_tags)
+        shown = {**state.config, "conversations_dir": _conversations_dir(state)}
+        display_config(shown, state.model, rows, state.think_tags, project=state.project)
         return
     parts = args.split()
     key = parts[0]
@@ -470,6 +493,17 @@ def _fits_window(client, messages, state, outcome="Not sent"):
     return True, (needed, n_ctx)
 
 
+def _conversations_dir(state):
+    """Where conversations are saved and loaded: the project's directory, else the global one."""
+    if state.project_dir is not None:
+        return str(projects.conversations_path(state.project_dir))
+    return state.config["conversations_dir"]
+
+
+def _projects_dir(state):
+    return state.config["projects_dir"]
+
+
 def _system_prompt_fits(text, client, conversation, state):
     """True when `text` as the system prompt, with the stored messages, fits the window.
 
@@ -478,11 +512,319 @@ def _system_prompt_fits(text, client, conversation, state):
     """
     if not text.strip():
         return True
-    candidate = [{"role": "system", "content": text}]
-    candidate += [m for m in conversation.get_messages() if m["role"] != "system"]
+    probe = copy.copy(conversation)  # same messages and notes, the new prompt
+    probe.system_prompt = text
+    candidate = probe.get_messages()
     with echo_suppressed():
         ok, _ = _fits_window(client, candidate, state, outcome="System prompt not changed")
     return ok
+
+
+# ---- projects (see docs/projects.md) ----
+
+# Reserved on top of the notes-sized reply for a thinking model's reasoning in /remember.
+_REMEMBER_THINK_ALLOWANCE = 2000
+
+
+def _read_scope(name, state):
+    """Everything a project switch needs, read up front; None (error shown) on any failure.
+
+    Reading first means a bad project.toml or an unreadable file leaves the session untouched.
+    """
+    try:
+        path = projects.project_dir(_projects_dir(state), name)
+    except ValueError as exc:
+        display_error(str(exc))
+        return None
+    if not path.is_dir():
+        display_error(f"No project named '{name}'. Create it with /project new {name}.")
+        return None
+    try:
+        settings, ignored = projects.load_settings(path)
+        prompt = projects.read_system_prompt(path)
+        notes = projects.read_notes(path)
+    except (ValueError, OSError, UnicodeDecodeError) as exc:
+        display_error(f"Cannot read project '{name}': {exc}")
+        return None
+    return {
+        "name": name,
+        "dir": path,
+        "settings": settings,
+        "ignored": ignored,
+        "prompt": prompt,
+        "notes": notes,
+    }
+
+
+def _reset_session(state, settings):
+    """Settings back to config.toml plus a project's `settings`; the toggles with no key to their defaults."""
+    state.config = apply_project(state.global_config, settings)
+    state.options = _initial_options(state.global_config, quiet=True)
+    state.options.update(_initial_options(settings, source="project.toml"))
+    state.show_stats = True
+
+
+def _apply_scope(conversation, state, scope):
+    """Make `scope` (from _read_scope, or None for no project) the active one. Cannot fail."""
+    settings = scope["settings"] if scope else {}
+    _reset_session(state, settings)
+    prompt = scope["prompt"] if scope else ""
+    state.project = scope["name"] if scope else None
+    state.project_dir = scope["dir"] if scope else None
+    state.project_prompt = prompt or state.global_config.get("system_prompt", "")
+    state.project_source_file = str(scope["dir"] / "system.md") if prompt else None
+    conversation.system_prompt = state.project_prompt
+    conversation.source_file = state.project_source_file
+    conversation.project_notes = scope["notes"] if scope else ""
+    state.notes_digest = projects.notes_digest(conversation.project_notes)
+
+
+def _announce_scope(scope, client, conversation):
+    """The lines that follow a switch or reload: ignored keys and a heavy-notes warning."""
+    if not scope:
+        return
+    for key in scope["ignored"]:
+        display_info(f"project.toml: {key} is ignored; put the system prompt in system.md.")
+    notes = conversation.project_notes
+    if not notes:
+        return
+    try:
+        count = client.count_tokens(notes, add_special=False)
+        n_ctx = client.server_n_ctx
+    except (RequestException, ValueError, KeyError):
+        return
+    if isinstance(count, int) and isinstance(n_ctx, int) and tokens.notes_heavy(count, n_ctx):
+        display_notes_heavy(count, n_ctx)
+
+
+def _switch_project(name, client, conversation, state):
+    """Switch to project `name`, or to no project when it is None. Returns True if switched.
+
+    Everything fallible is read first. The current conversation is then saved (even with
+    auto_save off) and, only if that worked, replaced by an empty one.
+    """
+    scope = _read_scope(name, state) if name else None
+    if name and scope is None:
+        return False
+    if not _auto_save(conversation, state, force=True):
+        display_error("Not switched: the current conversation could not be saved.")
+        return False
+    _apply_scope(conversation, state, scope)
+    conversation.messages.clear()
+    state.auto_save_name = "auto_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    state.retry_text = None
+    state.pending_includes = []
+    if scope:
+        display_info(f"Project: {escape(name)} ({scope['dir']})")
+    else:
+        display_info("No project selected.")
+    display_info("Session settings were reset to the configured ones (/set, /config, /stats).")
+    _announce_scope(scope, client, conversation)
+    return True
+
+
+def _reload_project(client, conversation, state):
+    """Re-read system.md, project.md and project.toml; the conversation is kept."""
+    scope = _read_scope(state.project, state)
+    if scope is None:
+        return
+    _apply_scope(conversation, state, scope)
+    display_info(f"Project reloaded: {escape(state.project)}")
+    display_info("Session settings were reset to the configured ones (/set, /config, /stats).")
+    _announce_scope(scope, client, conversation)
+
+
+def _sync_notes(conversation, state, client):
+    """Pick up an outside edit of project.md; the conversation carries the file's current text.
+
+    Called before each send, so the pre-send check prices the notes that will be sent. An
+    edit invalidates the server's cached prompt prefix, so one line says so.
+    """
+    if state.project_dir is None:
+        return
+    try:
+        text = projects.read_notes(state.project_dir)
+    except (OSError, UnicodeDecodeError) as exc:
+        display_error(f"Cannot read project.md: {exc}; using the notes loaded earlier.")
+        return
+    digest = projects.notes_digest(text)
+    if digest == state.notes_digest:
+        return
+    conversation.project_notes = text
+    state.notes_digest = digest
+    try:
+        count = client.count_tokens(text, add_special=False) if text else 0
+    except (RequestException, ValueError, KeyError):
+        count = None
+    if not isinstance(count, int):
+        display_info("project.md changed.")
+        return
+    display_info(f"project.md changed: {count:,} tokens")
+    n_ctx = state.context_length
+    if n_ctx and tokens.notes_heavy(count, n_ctx):
+        display_notes_heavy(count, n_ctx)
+
+
+def _handle_project(args, client, conversation, state):
+    parts = args.split(None, 1)
+    sub = parts[0] if parts else "info"
+    name = parts[1].strip() if len(parts) > 1 else ""
+    if sub == "info":
+        _project_info(client, conversation, state)
+    elif sub == "list":
+        display_projects(projects.list_projects(_projects_dir(state)), state.project)
+    elif sub == "new":
+        if not name:
+            display_error("Usage: /project new <name>")
+            return
+        try:
+            path = projects.create_project(_projects_dir(state), name)
+        except (ValueError, FileExistsError, OSError) as exc:
+            display_error(str(exc))
+            return
+        display_info(f"Project created: {path}. Use it with /project use {name}.")
+    elif sub == "use":
+        if not name:
+            display_error("Usage: /project use <name>")
+            return
+        _switch_project(name, client, conversation, state)
+    elif sub == "reload":
+        if not state.project:
+            display_error("No project selected. /project use <name>.")
+        else:
+            _reload_project(client, conversation, state)
+    elif sub == "leave":
+        if not state.project:
+            display_error("No project selected.")
+        else:
+            _switch_project(None, client, conversation, state)
+    else:
+        display_error("Usage: /project [info | list | new <name> | use <name> | reload | leave]")
+
+
+def _project_info(client, conversation, state):
+    if not state.project:
+        display_info("No project selected. /project list shows the projects; /project use <name> picks one.")
+        return
+    display_info(f"Project: {escape(state.project)} ({state.project_dir})")
+    notes = conversation.project_notes
+    try:
+        count = client.count_tokens(notes, add_special=False) if notes else 0
+        size = f"{count:,} tokens"
+    except (RequestException, ValueError, KeyError):
+        size = f"{len(notes):,} characters"
+    display_info(f"project.md: {size}")
+    source = "system.md" if state.project_source_file else "global system prompt"
+    display_info(f"System prompt: {source}")
+    try:
+        settings, _ = projects.load_settings(state.project_dir)
+    except ValueError:
+        settings = {}
+    if settings:
+        shown = ", ".join(f"{k} = {v}" for k, v in settings.items())
+        display_info(f"project.toml: {escape(shown)}")
+
+
+def _remember_room(messages, notes, note, client, state):
+    """True when the merge prompt and a reply the size of the notes fit the window.
+
+    Not _fits_window: this check applies even with context_check off, because a reply cut
+    off mid-file must never reach the approval step, and reserve_output_tokens is for chat
+    replies. A thinking allowance is reserved on top when there is room for it. Prints
+    why and returns False when /remember cannot go ahead.
+    """
+    outcome = "Not remembered"
+    try:
+        needed, n_ctx = client.check_fit(messages, model=state.model)
+        reply = client.count_tokens(f"{notes}\n{note}", add_special=False)
+    except KeyboardInterrupt:
+        console.print()
+        display_info("Cancelled.")
+        return False
+    except (RequestException, ValueError, KeyError) as exc:
+        display_error(f"{outcome}: could not check the context window ({exc}).")
+        return False
+    if not n_ctx:
+        display_error(f"{outcome}: the context window size is unknown.")
+        return False
+    if tokens.fits(needed, n_ctx, reply + _REMEMBER_THINK_ALLOWANCE):
+        return True
+    if tokens.fits(needed, n_ctx, reply):
+        return True  # no room for the allowance; a model that thinks long is caught by the cut-off check
+    display_error(tokens.refusal(needed, n_ctx, reply, outcome))
+    return False
+
+
+def _handle_remember(args, client, conversation, state):
+    """/remember <text>: ask the model to merge the note into project.md, then show the diff.
+
+    The conversation is not touched. Nothing is written unless the user answers y, the
+    reply was complete and project.md is unchanged since the model saw it.
+    """
+    if not state.project_dir:
+        display_error("No project selected. /project use <name>.")
+        return
+    note = args.strip()
+    if not note:
+        display_error("Usage: /remember <text>")
+        return
+    with echo_suppressed():
+        _sync_notes(conversation, state, client)
+        notes = conversation.project_notes
+        messages = projects.remember_messages(notes, note)
+        if not _remember_room(messages, notes, note, client, state):
+            return
+        try:
+            text, cut_off, think_tags = client.complete(
+                state.model, messages, options={"temperature": 0}, refreshed=True
+            )
+        except KeyboardInterrupt:
+            console.print()
+            display_info("Cancelled. project.md is unchanged.")
+            return
+        except ConnectionError:
+            display_error("Lost connection to llama-server. Is it still running?")
+            return
+        except (ThinkTagsError, HTTPError) as exc:
+            display_error(f"Not remembered: {exc}")
+            return
+    if cut_off:
+        display_error("Not remembered: the model's reply was cut off, so project.md is unchanged.")
+        return
+    new = projects.clean_reply(text, think_tags)
+    if not new:
+        display_error("Not remembered: the model's reply was empty. project.md is unchanged.")
+        return
+    if projects.shrank_too_much(notes, new):
+        display_error("Not remembered: the reply is under half the size of project.md, so it was rejected.")
+        return
+    diff = projects.diff_text(notes, new)
+    if not diff:
+        display_info("No change: project.md already says that.")
+        return
+    console.print(diff, markup=False, highlight=False)
+    try:
+        answer = input("Write this to project.md? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        answer = ""
+    if answer.strip().lower() != "y":
+        display_info("project.md unchanged.")
+        return
+    try:
+        current = projects.read_notes(state.project_dir)
+        if projects.notes_digest(current) != state.notes_digest:
+            display_error(
+                "project.md changed while you were deciding, so nothing was written. Run /remember again."
+            )
+            return
+        projects.write_notes(state.project_dir, new)
+    except (OSError, UnicodeDecodeError) as exc:
+        display_error(f"Could not write project.md: {exc}")
+        return
+    conversation.project_notes = new
+    state.notes_digest = projects.notes_digest(new)
+    display_info("project.md updated.")
 
 
 def handle_command(cmd, args, client, conversation, state):
@@ -548,7 +890,7 @@ def handle_command(cmd, args, client, conversation, state):
     elif cmd == "/save":
         name = args.strip() or None
         try:
-            conv_dir = state.config["conversations_dir"]
+            conv_dir = _conversations_dir(state)
             filepath = conversation.save(
                 conv_dir,
                 name=name,
@@ -565,15 +907,20 @@ def handle_command(cmd, args, client, conversation, state):
             display_error("Usage: /load <name>")
         else:
             try:
-                conv_dir = state.config["conversations_dir"]
+                conv_dir = _conversations_dir(state)
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
                 # Apply the whole saved conversation against the model being served
                 # now. The model names recorded in the file are information only:
                 # they never select a model and are never sent to the server.
                 conversation.messages = loaded_conv.messages
-                conversation.system_prompt = loaded_conv.system_prompt
-                # Where that system prompt came from (None clears a stale value).
-                conversation.source_file = loaded_conv.source_file
+                if state.project:
+                    # The project's prompt wins over the one saved in the file.
+                    conversation.system_prompt = state.project_prompt
+                    conversation.source_file = state.project_source_file
+                else:
+                    conversation.system_prompt = loaded_conv.system_prompt
+                    # Where that system prompt came from (None clears a stale value).
+                    conversation.source_file = loaded_conv.source_file
                 saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
                 display_info(
                     f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
@@ -589,7 +936,7 @@ def handle_command(cmd, args, client, conversation, state):
             display_error("Usage: /cat <name>")
         else:
             try:
-                conv_dir = state.config["conversations_dir"]
+                conv_dir = _conversations_dir(state)
                 loaded_conv, loaded_model = Conversation.load(conv_dir, name)
                 display_cat_conversation(name, loaded_conv, loaded_model)
             except FileNotFoundError:
@@ -614,7 +961,7 @@ def handle_command(cmd, args, client, conversation, state):
                 display_error(str(e))
 
     elif cmd == "/conversations":
-        conv_dir = state.config["conversations_dir"]
+        conv_dir = _conversations_dir(state)
         conversations = Conversation.list_saved(conv_dir)
         display_conversations(conversations)
 
@@ -664,12 +1011,20 @@ def handle_command(cmd, args, client, conversation, state):
     elif cmd == "/config":
         _handle_config(args, state, client)
 
+    elif cmd == "/project":
+        _handle_project(args, client, conversation, state)
+
+    elif cmd == "/remember":
+        _handle_remember(args, client, conversation, state)
+
     elif cmd == "/info":
         try:
             counts = tokens.breakdown(client, conversation, model=state.model)
         except (RequestException, ValueError, KeyError):
             counts = None  # the server could not be asked; the rest of the table still shows
         display_conversation_info(conversation.summary(), counts, state.context_length)
+        if counts and counts.get("notes") and tokens.notes_heavy(counts["notes"], counts["n_ctx"]):
+            display_notes_heavy(counts["notes"], counts["n_ctx"])
 
     else:
         display_error(f"Unknown command: {cmd}. Type /? for available commands.")
@@ -677,14 +1032,18 @@ def handle_command(cmd, args, client, conversation, state):
     return True
 
 
-def _auto_save(conversation, state):
-    """Silently auto-save the conversation if enabled."""
-    if not state.config.get("auto_save", True):
-        return
+def _auto_save(conversation, state, force=False):
+    """Silently auto-save the conversation if enabled; force saves even when it is not.
+
+    Returns False only when the write failed, so a caller that is about to discard the
+    conversation (a project switch) can refuse; nothing to save counts as success.
+    """
+    if not force and not state.config.get("auto_save", True):
+        return True
     if not conversation.messages:
-        return
+        return True
     try:
-        conv_dir = state.config["conversations_dir"]
+        conv_dir = _conversations_dir(state)
         conversation.save(
             conv_dir,
             name=state.auto_save_name,
@@ -692,7 +1051,8 @@ def _auto_save(conversation, state):
             omit_thinking=_omit_thinking(state),
         )
     except OSError:
-        pass
+        return False
+    return True
 
 
 def main():
@@ -719,13 +1079,16 @@ def main():
         context_length=client.server_n_ctx,
         options=_initial_options(config),
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
+        global_config=dict(config),
     )
     # Startup value for /config; no announcement (the /config row covers it).
     _update_think_tags(state, client.think_tags, announce=False)
     conversation = Conversation(system_prompt=config["system_prompt"])
 
-    init_readline(config["conversations_dir"])
-    print_welcome(state.model)
+    init_readline(lambda: _conversations_dir(state), lambda: _projects_dir(state))
+    if args.project and not _switch_project(args.project, client, conversation, state):
+        sys.exit(1)
+    print_welcome(state.model, state.project)
 
     # Main REPL
     try:
@@ -776,6 +1139,8 @@ def main():
             # Echo is off for the whole turn (check, request, reply, stats, autosave) and comes
             # back just before the next prompt: readline entered with ECHO off draws nothing.
             with echo_suppressed():
+                # An outside edit of project.md joins the prompt before it is priced.
+                _sync_notes(conversation, state, client)
                 # The message joins the conversation only once its prompt is known to fit.
                 candidate = conversation.get_messages() + [{"role": "user", "content": text}]
                 fits, priced = _fits_window(client, candidate, state)

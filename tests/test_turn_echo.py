@@ -73,9 +73,20 @@ def run_turn(tmp_path, chat_behaviour):
     return session.log, session.infos
 
 
-def run_session(tmp_path, chat_behaviour, inputs=("hello", None), check_fit=(100, 4096), config=None):
+def run_session(
+    tmp_path,
+    chat_behaviour,
+    inputs=("hello", None),
+    check_fit=(100, 4096),
+    config=None,
+    argv=(),
+    setup=None,
+    answers=(),
+):
     """Run main() over `inputs` (None is EOF). check_fit is what client.check_fit returns,
-    or an exception to raise from inside the check; a list gives one result per call."""
+    or an exception to raise from inside the check; a list gives one result per call.
+    argv adds command-line arguments; setup(client) runs before main() to script the mock
+    client; answers feed input() (the /remember approval prompt): a string, or an exception to raise."""
     session = Session()
     log, infos = session.log, session.infos
     rec = Recorder(log)
@@ -118,14 +129,32 @@ def run_session(tmp_path, chat_behaviour, inputs=("hello", None), check_fit=(100
     client.chat.side_effect = client_chat
     client.check_fit.side_effect = client_check
     session.client = client
-    config = {**DEFAULTS, "conversations_dir": str(tmp_path), **(config or {})}
+    config = {
+        **DEFAULTS,
+        "conversations_dir": str(tmp_path),
+        "projects_dir": str(tmp_path / "projects"),
+        **(config or {}),
+    }
+    answers = iter(answers)
+
+    def fake_input(prompt=""):
+        answer = next(answers)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    if setup:
+        setup(client)
     real_print = chat.console.print
     real_conversation = chat.Conversation
+    make_conversation.load = real_conversation.load  # /load and /conversations use the class
+    make_conversation.list_saved = real_conversation.list_saved
 
     with (
         mock.patch.object(chat, "load_config", return_value=config),
         mock.patch.object(chat, "LlamaClient", return_value=client),
-        mock.patch.object(sys, "argv", ["chat.py"]),
+        mock.patch.object(sys, "argv", ["chat.py", *argv]),
+        mock.patch("builtins.input", fake_input),
         mock.patch.object(chat, "init_readline"),
         mock.patch.object(chat, "save_readline_history"),
         mock.patch.object(chat, "echo_suppressed", rec),

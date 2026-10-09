@@ -15,6 +15,8 @@ DEFAULTS = {
     "system_prompt": "",
     "llama_url": "http://127.0.0.1:8001",
     "conversations_dir": str(Path.home() / ".local" / "share" / "chat" / "conversations"),
+    # Where named projects live (see docs/projects.md).
+    "projects_dir": str(Path.home() / ".local" / "share" / "chat" / "projects"),
     "auto_save": True,
     "save_thinking": True,
     # Optional override of the detected thinking tags (both must be non-empty).
@@ -47,3 +49,10 @@ def load_config():
         config.update({k: file_config[k] for k in DEFAULTS if k in file_config})
 
     return config
+
+
+def apply_project(config, settings):
+    """A new config: `config` with a project's settings laid over it (`config` is not changed)."""
+    merged = dict(config)
+    merged.update(settings)
+    return merged

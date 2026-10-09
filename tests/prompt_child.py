@@ -8,7 +8,7 @@ import tempfile
 
 import ui
 
-ui.init_readline(tempfile.mkdtemp())
+ui.init_readline(lambda d=tempfile.mkdtemp(): d)
 while True:
     line = ui.get_user_input()
     print("GOT", repr(line), flush=True)

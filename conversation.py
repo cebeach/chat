@@ -40,6 +40,9 @@ class Conversation:
         self.system_prompt = system_prompt
         self.messages = []
         self.source_file = None
+        # Standing notes of the active project (see projects.py). They ride in the system
+        # message and are never saved: they belong to the session, not the transcript.
+        self.project_notes = ""
 
     def _add(self, role, content, includes=None, model=None, thinking=None):
         msg = {
@@ -129,6 +132,13 @@ class Conversation:
         if asst_msg:
             self.messages.append({"role": "assistant", "content": asst_msg["content"]})
 
+    def system_content(self):
+        """The system message's text: the system prompt, then the project notes block."""
+        if not self.project_notes:
+            return self.system_prompt
+        block = f"# Project notes\n{self.project_notes}"
+        return f"{self.system_prompt}\n\n{block}" if self.system_prompt else block
+
     def get_messages(self):
         """Return messages list with system prompt prepended if set.
 
@@ -139,8 +149,9 @@ class Conversation:
         assistant turn reaches the chat template.
         """
         msgs = []
-        if self.system_prompt:
-            msgs.append({"role": "system", "content": self.system_prompt})
+        system = self.system_content()
+        if system:
+            msgs.append({"role": "system", "content": system})
         for msg in self.messages:
             if msg["role"] == "assistant" and not msg["content"]:
                 if msgs and msgs[-1]["role"] == "user":

@@ -14,7 +14,8 @@ every request and saved with the conversation.
 - **Manual.** `/save <name>` writes `<name>.json`. With no name it uses the current
   timestamp.
 
-Files go to `conversations_dir` (default `~/.local/share/chat/conversations/`).
+Files go to `conversations_dir` (default `~/.local/share/chat/conversations/`), or to the
+active [project's](projects.md) `conversations/` directory.
 
 ## Finding and reading
 - `/conversations` lists saved conversations, newest first.
@@ -80,6 +81,7 @@ text. Saving such a file again does not separate them. Discard these files or ed
 
 ```bash
 python conv2txt.py ~/.local/share/chat/conversations/notes.json
+python conv2txt.py ~/.local/share/chat/projects/novel/conversations/ch1.json   # a project's conversation
 python conv2txt.py notes.json -o notes.txt   # write to a file
 python conv2txt.py notes.json --no-header    # omit the model and system prompt header
 python conv2txt.py notes.json -l 80          # wrap at 80 columns (default 110)

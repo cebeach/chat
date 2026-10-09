@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.theme import Theme
 
 from conversation import Conversation
+from projects import list_projects
 
 HISTORY_FILE = Path.home() / ".local" / "share" / "chat" / "history"
 HISTORY_MAX = 1000
@@ -27,7 +28,9 @@ COMMANDS = [
     "/exit",
     "/info",
     "/load",
+    "/project",
     "/recall",
+    "/remember",
     "/retry",
     "/save",
     "/set",
@@ -48,10 +51,12 @@ theme = Theme(
 console = Console(theme=theme)
 
 
-def print_welcome(model):
+def print_welcome(model, project=None):
     console.print()
     console.print("[bold]AI Chat[/bold] (llama.cpp)", style="info")
     console.print(f"Model: [bold]{model}[/bold]")
+    if project:
+        console.print(f"Project: [bold]{escape(project)}[/bold]")
     console.print("Type [bold]/?[/bold] for commands, [bold]/exit[/bold] to quit.")
     console.print()
 
@@ -71,8 +76,14 @@ def print_help():
     table.add_row("/help", "Show this help message")
     table.add_row("/info", "Show conversation and context window statistics")
     table.add_row("/load <name>", "Load a saved conversation")
+    table.add_row(
+        "/project", "Show the active project (/project list | new <name> | use <name> | reload | leave)"
+    )
     table.add_row("/read <path>", "Read a text file into the conversation")
     table.add_row("/recall <n>", "Recall message pair n into context")
+    table.add_row(
+        "/remember <text>", "Merge a note into the project's project.md (shown as a diff for approval)"
+    )
     table.add_row("/retry", "Regenerate the last response")
     table.add_row("/save <name>", "Save conversation (default: timestamp)")
     table.add_row("/set", "Show model options and this session's overrides of the server's values")
@@ -83,6 +94,18 @@ def print_help():
         'Set the system prompt (use """ for multiline or a path to a file within the current directory)',
     )
     table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
+    console.print(table)
+
+
+def display_projects(names, active=None):
+    if not names:
+        console.print("[info]No projects. Create one with /project new <name>.[/info]")
+        return
+    table = Table(title="Projects", show_header=True, header_style="bold")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Active")
+    for name in names:
+        table.add_row(escape(name), "yes" if name == active else "")
     console.print(table)
 
 
@@ -158,12 +181,18 @@ def describe_think_tags(think_tags):
     return f"{escape(start)} … {escape(end)} ({source})"
 
 
-def display_config(config, current_model, options=None, think_tags=None):
-    """options: rows from option_rows(), or None to leave the model options out."""
+def display_config(config, current_model, options=None, think_tags=None, project=None):
+    """options: rows from option_rows(), or None to leave the model options out.
+
+    project: the active project's name, or None. config["conversations_dir"] is shown
+    as given, so the caller passes the directory that is in effect.
+    """
     table = Table(title="Configuration", show_header=True, header_style="bold")
     table.add_column("Setting", style="bold cyan")
     table.add_column("Value")
     table.add_row("model", current_model)
+    if project:
+        table.add_row("project", escape(project))
     table.add_row("system_prompt", config["system_prompt"] or "(none)")
     table.add_row("llama_url", config["llama_url"])
     table.add_row("conversations_dir", config["conversations_dir"])
@@ -265,6 +294,13 @@ def display_cat_conversation(name, conversation, model):
         console.print()
 
 
+def display_notes_heavy(notes_tokens, n_ctx):
+    console.print(
+        f"[warning]The project notes take {notes_tokens:,} of {n_ctx:,} tokens "
+        f"({notes_tokens / n_ctx:.0%}); little room is left for the conversation.[/warning]"
+    )
+
+
 def display_conversation_info(summary, counts=None, context_length=None):
     """The /info table. `counts` is tokens.breakdown()'s dict (None: not available)."""
     table = Table(title="Conversation Info", show_header=True, header_style="bold")
@@ -282,6 +318,8 @@ def display_conversation_info(summary, counts=None, context_length=None):
     if counts:
         context_length = counts.get("n_ctx") or context_length
         table.add_row("Tokens: system prompt", f"{counts['system']:,}")
+        if counts.get("notes"):
+            table.add_row("Tokens: project notes", f"{counts['notes']:,}")
         table.add_row("Tokens: your messages", f"{counts['user']:,}")
         table.add_row("Tokens: AI replies", f"{counts['assistant']:,}")
         table.add_row("Tokens: template ≈", f"{counts['overhead']:,}")
@@ -468,14 +506,23 @@ def display_stats(stats):
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 
 
-def init_readline(conversations_dir):
-    """Load readline history from disk and configure tab-completion."""
+def init_readline(conversations_dir, projects_dir=None):
+    """Load readline history from disk and configure tab-completion.
+
+    conversations_dir and projects_dir are callables returning the directory to complete
+    from, so completion follows a project switch (projects_dir may be None).
+    """
 
     def completer(text, state):
         line = readline.get_line_buffer().lstrip()
         if (line.startswith("/load ") or line.startswith("/cat ")) and conversations_dir:
-            names = [n for n, _ in Conversation.list_saved(conversations_dir)]
+            names = [n for n, _ in Conversation.list_saved(conversations_dir())]
             matches = [n for n in names if n.startswith(text)]
+        elif line.startswith(("/project use ", "/project new ")) and projects_dir:
+            matches = [n for n in list_projects(projects_dir()) if n.startswith(text)]
+        elif line.startswith("/project ") and " " not in line[len("/project ") :]:
+            subs = ["info", "list", "new", "use", "reload", "leave"]
+            matches = [c for c in subs if c.startswith(text)]
         elif text.startswith("/"):
             matches = [c for c in COMMANDS if c.startswith(text)]
         else:

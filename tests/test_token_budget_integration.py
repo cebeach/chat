@@ -76,6 +76,26 @@ def test_the_counted_prompt_equals_what_the_server_evaluates(llama_client):
     assert needed == stream.stats["prompt_tokens"]
 
 
+def test_the_counted_prompt_with_project_notes_equals_what_the_server_evaluates(llama_client):
+    """The notes block rides in the system message, so it is priced and evaluated with it."""
+    conv = Conversation(system_prompt="You are terse.")
+    conv.project_notes = "- Anna is left-handed\n- Ben is her brother\n"
+    conv.add_user("Say hi.")
+    conv.add_assistant("hi")
+    pending = conv.get_messages() + user("Now say bye.")
+    assert pending[0]["content"].endswith("- Ben is her brother\n")
+    needed, _ = llama_client.check_fit(pending, model=llama_client.server_model)
+    stream = llama_client.chat(llama_client.server_model, pending, OPTIONS, refreshed=True)
+    "".join(stream)
+    assert needed == stream.stats["prompt_tokens"]
+    counts = tokens.breakdown(llama_client, conv, model=llama_client.server_model)
+    assert counts["notes"] > 0
+    assert (
+        counts["system"] + counts["notes"] + counts["user"] + counts["assistant"] + counts["overhead"]
+        == counts["total"]
+    )
+
+
 def test_info_totals_match_the_counted_history(llama_client):
     conv = Conversation(system_prompt="You are terse.")
     conv.add_user("Say hi.")
