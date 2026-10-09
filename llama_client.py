@@ -1,7 +1,8 @@
 """Client for the llama.cpp server's native HTTP API.
 
 Only native endpoints are used: /health, /props, /apply-template, /tokenize
-and /completion. See tools/server/README.md in the llama.cpp source. The model
+and /completion. See docs/llama-server-api.md for what each is used for and
+when, and tools/server/README.md in the llama.cpp source for the server's side. The model
 being served and its context length are read from /props, never chosen by
 the client.
 

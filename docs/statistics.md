@@ -52,9 +52,54 @@ Settings (see [configuration](configuration.md)):
 | `context_check` | `false` turns off all of the above: no counting, no refusal, no warning, no prompt line. A prompt that is too large then reaches the server and comes back as its own error. Also `/config context_check on\|off`. Use it if the reported window is wrong |
 | `reserve_output_tokens` | Tokens kept free for the reply (default 0) |
 
-The check is skipped, without an error, when the server cannot be reached or reports no
-window; the send itself then reports the problem as usual. Files over 8 MB are refused
-before any counting ("File too large to read.").
+Files over 8 MB are refused before any counting ("File too large to read.").
+
+### When the count cannot be made
+If the server cannot be reached, answers the counting calls with an error, or reports no
+window size, the check is skipped without a message and the send goes ahead. The send then
+meets the same problem and reports it as it always has: "Lost connection to
+llama-server" or `llama-server error: ...`, and the unanswered message is taken back out of
+the conversation. A failed count therefore never blocks a send that would have worked. The
+cost is that if the prompt really was too large, you get the server's own error (an HTTP
+400) instead of the "Not sent" message above, and that error shows only the HTTP status,
+not the server's explanation.
+
+## How the count works
+The app does not estimate: it asks llama-server, which has the model's own chat template and
+tokenizer. For each message it makes these calls:
+
+1. **Window.** `GET /props` re-reads the context window the server is using right now, so
+   a server restarted with another `-c` is noticed. This is the per-slot size, the limit one
+   request must fit.
+2. **Candidate.** The prompt is the system prompt, the stored messages and the new message,
+   exactly as they will be sent: role and text only. A reply's stored reasoning is not
+   included, and neither is an empty reply with the question before it, because those are
+   never sent.
+3. **Render.** `POST /apply-template` returns that candidate as the server will give it to
+   the model: the template's role markers, special tokens and the opening of the reply.
+   This is the same call that builds the real request.
+4. **Tokenize.** `POST /tokenize` returns the tokens of the rendered text, and the count is
+   their number. It asks for the same special-token handling the real request uses
+   (`add_special` and `parse_special` both true), so a start-of-sequence token is counted
+   and markers such as `<|im_start|>` count as the single tokens they are. Without
+   `add_special` the count would be short on models that add one.
+
+The count therefore equals what the server reports as the request's prompt tokens after
+the reply. A test against a real server checks that equality.
+
+A prompt fits when `prompt + reserve_output_tokens + 1 <= window`. The `+ 1` is because
+llama-server rejects a request whose prompt alone is as long as the window, even with
+nothing to generate. The warning is for a prompt above 80% of the window.
+
+Counting costs three small requests per message, and for a large included file the
+tokenizing can take seconds. The keyboard echo is off during it, as during a reply, so keys
+typed meanwhile do not show up in the prompt line.
+
+`/info` uses the same calls. Its total is the exact count for the stored conversation (the
+next prompt before you type anything). The system, your-messages and AI-replies rows are
+counted one group at a time without the start-of-sequence token, and `template` is the total
+minus those, never below 0. Counted apart, the pieces can differ from the whole by a token
+or two, which is why that row is marked as an approximation.
 
 ## After each reply
 A dim line is printed under the reply, for example:
