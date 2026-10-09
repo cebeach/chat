@@ -17,3 +17,7 @@
 # Seconds to wait for the model to load before giving up. A profile's own
 # startup_timeout wins over this. Default: 120.
 # startup_timeout = 120
+
+# Accepted and checked, but not used yet: reserved for running several servers at once.
+# [budget]
+# vram_mb = 24000

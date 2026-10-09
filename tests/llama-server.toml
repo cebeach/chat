@@ -34,18 +34,22 @@ args = [
 file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
 source_url = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q8_0.gguf"
 think_tags = ["<think>", "</think>"]   # observed on the real model; checked by the integration tests
+vram_mb = 2153                     # memory this profile uses with its exact args, measured on your GPU
 
 [models.gemma-4-E2B-it-Q8_0]
 file = "gemma-4-E2B-it-Q8_0.gguf"
 source_url = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf"
 think_tags = ["<|channel>thought", "<channel|>"]
+vram_mb = 2666
 
 [models.gpt-oss-20b-MXFP4]
 file = "gpt-oss-20b-MXFP4.gguf"
 source_url = "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf"
 think_tags = ["<|channel|>analysis<|message|>", "<|end|><|start|>assistant<|channel|>final<|message|>"]
+vram_mb = 9667
 
 [models.Ministral-3-3B-Instruct-2512-Q8_0]
 file = "Ministral-3-3B-Instruct-2512-Q8_0.gguf"
 source_url = "https://huggingface.co/ggml-org/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q8_0.gguf"
 think_tags = []                    # this model does not think
+vram_mb = 4539
