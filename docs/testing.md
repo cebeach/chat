@@ -125,7 +125,7 @@ vram_mb = 6200                     # optional: measured memory use with these ar
 | `file` | profile, required | GGUF filename, relative to your models directory |
 | `remove` | profile | Defaults to leave out for this profile; see [Overriding a default](#overriding-a-default) |
 | `chat_template` | profile | Template file in `tests/chat-templates/`; see [Chat templates](#chat-templates) |
-| `vram_mb` | profile | Positive integer. Accepted and checked, not used yet (see [Parallel servers](#parallel-servers-not-supported-yet)) |
+| `vram_mb` | profile | Optional positive integer: a record of the GPU memory this profile uses with its exact args, measured on your GPU. Accepted and checked; nothing reads it |
 | `startup_timeout` | profile | Positive number of seconds. Beats the local file's value |
 | `source_url` | profile | Optional. An `http(s)` link to the GGUF file the profile uses: a reference for where it came from, and a download target for a possible future step. **Nothing downloads it today**: the tests use the file already in your models directory, and this is an air-gapped project. Only its shape is checked, and a URL with credentials in it is refused, because the file is committed |
 | `think_tags` | profile | Optional. The thinking tags the model is expected to use, as observed on the real model: `[]` for a model that does not think, or `[start, end]`, two non-empty strings. Read by the [thinking-tag tests](#thinking-tag-tests) |
@@ -296,7 +296,7 @@ This file is not committed. It holds what depends on your machine. Every key is 
 | `models_dir` | Directory with the GGUF files. `$LLAMA_TEST_MODEL_DIR` overrides it |
 | `binary` | The llama-server to run. Default: the first `llama-server` on `PATH`. A bare name is looked up on `PATH`; anything with a slash must be an executable file |
 | `startup_timeout` | Seconds to wait for the model to load. Default 120. A profile's value wins |
-| `[budget]` `vram_mb` | Total GPU memory the tests may use. Accepted and checked, not used yet |
+| `[budget]` `vram_mb` | Optional positive integer: a record of your GPU's total memory. Accepted and checked; nothing reads it |
 
 Paths may start with `~`, which is expanded. After that they must be absolute: a relative
 path would mean something different depending on where you started pytest, so it is an
@@ -314,9 +314,9 @@ default. That has consequences:
 - Before launching, the fixture checks that nothing is using the port. If something is,
   for example your own llama-server, the test run stops with an error saying so. The
   fixture never uses a server it did not start, and never stops one.
-- Only one test server can run at a time, so the integration tests cannot run in
-  parallel (do not use pytest-xdist), and cannot run while you have a server of your own
-  on 8001. Stop yours, or run `-m "not integration"`.
+- Only one test server can run at a time, so the integration tests run serially (do not
+  use pytest-xdist) and cannot run while you have a server of your own on 8001. Stop
+  yours, or run `-m "not integration"`.
 - The environment variables `LLAMA_ARG_*` and `LLAMA_API_KEY` are removed from the
   server's environment. llama-server reads its options from them, and one left in your
   shell would silently change what the committed profile says. An API key would also
@@ -377,14 +377,6 @@ from then on a problem is an error that names its cause:
 
 Errors in `tests/llama-server.toml` itself appear on every machine, configured or not,
 as soon as an integration test is selected.
-
-## Parallel servers (not supported yet)
-
-Running several test servers at once would need a calibrated memory footprint for each
-profile, small GGUF files to test with, and a limit on how many fit in your GPU memory.
-None of that is built. The `vram_mb` keys are accepted and checked so that adding it
-later does not change the config files, but nothing reads them, and a profile bigger than
-the budget is not an error.
 
 ## Pseudo-terminal tests (the prompt and the tty)
 
