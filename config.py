@@ -8,6 +8,8 @@ from pathlib import Path
 
 import tomllib
 
+import duel
+
 CONFIG_DIR = Path.home() / ".config" / "chat"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
@@ -32,6 +34,16 @@ DEFAULTS = {
     "context_check": True,
     # Tokens kept free for the reply when deciding whether a prompt fits; 0 keeps none.
     "reserve_output_tokens": 0,
+    # /duel (see docs/duel.md). The temperature and seed of a side are unset unless given.
+    "duel_axes": list(duel.DEFAULT_AXES),
+    "duel_stance_a": duel.DEFAULT_STANCE_A,
+    "duel_stance_b": duel.DEFAULT_STANCE_B,
+    "duel_temperature_a": None,
+    "duel_temperature_b": None,
+    "duel_seed_a": None,
+    "duel_seed_b": None,
+    # "shared": the two sides share one KV pool of the reported size; "split": each gets that size.
+    "duel_context": "shared",
 }
 
 

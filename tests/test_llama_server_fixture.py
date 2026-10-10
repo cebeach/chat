@@ -817,6 +817,150 @@ class TestGenerateTests:
         assert "not valid TOML" in str(metafunc.config.stash[conftest_mod.CONFIG_ERROR])
 
 
+class TestProfileParallel:
+    """profile_parallel: the number of slots the server will have, from the effective args."""
+
+    @staticmethod
+    def profile(args=(), default_args=()):
+        text = "[defaults]\nargs = %s\n[models.p]\nfile = 'p.gguf'\nargs = %s\n" % (
+            json.dumps(list(default_args)),
+            json.dumps(list(args)),
+        )
+        # a profile is built through load_config, so the merge rule is the real one
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.toml"
+            path.write_text(text)
+            return cfg.load_config(path, Path(tmp)).profiles["p"]
+
+    def test_absent_means_one(self):
+        assert cfg.profile_parallel(self.profile()) == 1
+
+    def test_both_spellings_and_the_equals_form(self, subtests):
+        for flag, expected in {
+            "--parallel 2": 2,
+            "-np 3": 3,
+            "--parallel=4": 4,
+            "--parallel 1": 1,
+        }.items():
+            with subtests.test(flag=flag):
+                assert cfg.profile_parallel(self.profile([flag])) == expected
+
+    def test_a_profile_replaces_the_default_spelled_the_same(self):
+        assert cfg.profile_parallel(self.profile(["--parallel 2"], ["--parallel 1"])) == 2
+
+    def test_when_both_spellings_appear_the_last_one_wins(self):
+        assert cfg.profile_parallel(self.profile(["--parallel 1"], ["-np 4"])) == 1
+        assert cfg.profile_parallel(self.profile(["-np 4"], ["--parallel 1"])) == 4
+
+    def test_extras_can_raise_and_lower_the_count(self):
+        one_slot = self.profile()
+        two_slots = self.profile(["--parallel 2"])
+        assert cfg.profile_parallel(one_slot, ("--parallel 2",)) == 2
+        assert cfg.profile_parallel(two_slots, ("--parallel 1",)) == 1
+        assert two_slots.args == [("--parallel", "2")]  # the profile itself is unchanged
+
+    def test_auto_and_non_positive_values_are_not_counted_on(self):
+        assert cfg.profile_parallel(self.profile(["--parallel -1"])) == 1
+
+    def test_a_non_integer_value_is_an_error(self):
+        with pytest.raises(LlamaTestConfigError, match="needs an integer"):
+            cfg.profile_parallel(self.profile(["--parallel many"]))
+
+
+class TestParallelGating:
+    """The llama_parallel marker: profiles with too few slots are dropped for that test."""
+
+    CONFIG = """
+[defaults]
+args = ["--ctx-size 4096"]
+
+[models.one]
+file = "one.gguf"
+
+[models.two]
+file = "two.gguf"
+args = ["--parallel 2"]
+
+[models.four]
+file = "four.gguf"
+args = ["-np 4"]
+"""
+
+    @pytest.fixture(autouse=True)
+    def profiles(self, tmp_path, monkeypatch):
+        path = tmp_path / "p.toml"
+        path.write_text(self.CONFIG)
+        config = cfg.load_config(path, tmp_path)
+        monkeypatch.setattr(cfg, "load_config", lambda *args, **kwargs: config)
+        monkeypatch.delenv("LLAMA_TEST_MODEL", raising=False)
+
+    @staticmethod
+    def run(marks, option=None, fixturenames=("llama_server",)):
+        from tests import conftest as conftest_mod
+
+        metafunc = FakeMetafunc(list(fixturenames), option, marks)
+        conftest_mod.pytest_generate_tests(metafunc)
+        return metafunc
+
+    def test_profiles_below_the_minimum_are_dropped(self):
+        metafunc = self.run([pytest.mark.llama_parallel(2).mark], "all")
+        assert [call[1] for call in metafunc.calls] == [["two", "four"]]
+
+    def test_a_higher_minimum(self):
+        metafunc = self.run([pytest.mark.llama_parallel(3).mark], "all")
+        assert [call[1] for call in metafunc.calls] == [["four"]]
+
+    def test_an_unmarked_test_keeps_every_profile(self):
+        metafunc = self.run([], "all")
+        assert [call[1] for call in metafunc.calls] == [["one", "two", "four"]]
+
+    def test_the_default_run_is_only_the_first_profile_so_the_test_is_skipped_with_a_reason(self):
+        metafunc = self.run([pytest.mark.llama_parallel(2).mark])
+        ((argnames, values, kwargs),) = metafunc.calls
+        (param,) = values
+        (skip,) = [m for m in param.marks if m.name == "skip"]
+        reason = skip.kwargs["reason"]
+        assert "llama_parallel" in reason and "one (1)" in reason and "--parallel 2" in reason
+        assert param.values == (None,) and kwargs == {"indirect": True, "scope": "session"}
+
+    def test_the_marker_combines_with_llama_args_and_the_extras_count(self):
+        marks = [pytest.mark.llama_parallel(2).mark, pytest.mark.llama_args("--parallel 2").mark]
+        metafunc = self.run(marks, "one,two")
+        ((_, values, _),) = metafunc.calls
+        assert [v.values[0][0] for v in values] == ["one", "two"]  # raising the count qualifies "one"
+
+    def test_extras_that_lower_the_count_disqualify(self):
+        marks = [pytest.mark.llama_parallel(2).mark, pytest.mark.llama_args("--parallel 1").mark]
+        metafunc = self.run(marks, "two")
+        ((_, values, _),) = metafunc.calls
+        assert any(m.name == "skip" for m in values[0].marks)
+
+    def test_a_configuration_error_is_still_deferred(self):
+        from tests import conftest as conftest_mod
+
+        metafunc = self.run([pytest.mark.llama_parallel(2).mark], "nope")
+        assert [call[1] for call in metafunc.calls] == [[conftest_mod.CONFIG_ERROR_ID]]
+
+
+class TestCommittedParallelProfile:
+    def test_the_two_slot_profile_reuses_the_gguf_and_the_first_profile_has_one_slot(self):
+        config = cfg.load_config()
+        first = next(iter(config.profiles.values()))
+        two = config.profiles["qwen35-2B-Q8_0-parallel2"]
+        assert cfg.profile_parallel(first) == 1 and cfg.profile_parallel(two) == 2
+        assert two.file == first.file and two.think_tags == first.think_tags and two.source_url
+        assert two is not first and two.vram_mb is None
+
+    def test_no_other_committed_profile_has_more_than_one_slot(self):
+        config = cfg.load_config()
+        others = {
+            n: cfg.profile_parallel(p) for n, p in config.profiles.items() if n != "qwen35-2B-Q8_0-parallel2"
+        }
+        assert set(others.values()) == {1}
+
+
 class TestExtraArgs:
     """The llama_args marker: a test's flags merged over the profile's args."""
 

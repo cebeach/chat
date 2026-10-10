@@ -42,17 +42,45 @@ def pytest_generate_tests(metafunc):
     if "llama_server" not in metafunc.fixturenames:
         return
     spec = metafunc.config.getoption("--llama-model") or os.environ.get("LLAMA_TEST_MODEL")
+    extra = tuple(arg for mark in metafunc.definition.iter_markers("llama_args") for arg in mark.args)
     try:
-        names = cfg.select_profile_names(cfg.load_config(), spec)
+        config = cfg.load_config()
+        names = cfg.select_profile_names(config, spec)
+        names, skip = _with_enough_slots(metafunc, config, names, extra)
     except cfg.LlamaTestConfigError as exc:
         metafunc.config.stash[CONFIG_ERROR] = exc
-        names = [CONFIG_ERROR_ID]
-    extra = tuple(arg for mark in metafunc.definition.iter_markers("llama_args") for arg in mark.args)
+        names, skip = [CONFIG_ERROR_ID], None
+    if skip:
+        # No selected profile has the slots this test needs: skipped, not failed (nothing starts).
+        param = pytest.param(None, marks=pytest.mark.skip(reason=skip), id="no-profile-with-enough-slots")
+        metafunc.parametrize("llama_server", [param], indirect=True, scope="session")
+        return
     if extra and names != [CONFIG_ERROR_ID]:
         # A tuple, so equal extras compare equal and pytest groups those tests on one server.
         suffix = cfg.extras_id(extra)
         names = [pytest.param((name, extra), id=f"{name}+{suffix}") for name in names]
     metafunc.parametrize("llama_server", names, indirect=True, scope="session")
+
+
+def _with_enough_slots(metafunc, config, names, extra):
+    """(names, skip reason): the profiles with at least the slots a `llama_parallel(N)` test needs.
+
+    Tests without the marker keep every name. When none qualifies the reason names the marker and
+    each profile checked with its slot count.
+    """
+    marks = list(metafunc.definition.iter_markers("llama_parallel"))
+    if not marks:
+        return names, None
+    needed = max(int(mark.args[0]) if mark.args else 2 for mark in marks)
+    slots = {name: cfg.profile_parallel(config.profiles[name], extra) for name in names}
+    kept = [name for name in names if slots[name] >= needed]
+    if kept:
+        return kept, None
+    checked = ", ".join(f"{name} ({slots[name]})" for name in names)
+    return names, (
+        f"needs a profile with --parallel {needed} or more (llama_parallel marker); "
+        f"profiles checked: {checked}. Run with --llama-model <a profile that sets --parallel {needed}>"
+    )
 
 
 @dataclass

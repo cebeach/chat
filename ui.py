@@ -25,6 +25,7 @@ COMMANDS = [
     "/clear",
     "/config",
     "/conversations",
+    "/duel",
     "/exit",
     "/info",
     "/load",
@@ -72,6 +73,10 @@ def print_help():
         "Show configuration; '/config save_thinking on|off' controls whether <think> blocks are saved (omit on/off to toggle)",
     )
     table.add_row("/conversations", "List saved conversations")
+    table.add_row(
+        "/duel [--auto] <brief>",
+        "Two slots write the same story and challenge each other (/duel for usage; needs --parallel 2)",
+    )
     table.add_row("/exit", "Quit the application")
     table.add_row("/help", "Show this help message")
     table.add_row("/info", "Show conversation and context window statistics")
@@ -219,6 +224,36 @@ def display_options(rows):
     table.add_column("Session override")
     for key, server, override in rows:
         table.add_row(key, server, override)
+    console.print(table)
+
+
+def display_ledger(issues):
+    """The issues of a duel: number, whose draft, axis, quote, objection and status."""
+    if not issues:
+        console.print("[info]No issues raised.[/info]")
+        return
+    table = Table(title="Issues", show_header=True, header_style="bold", show_lines=True)
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Against")
+    table.add_column("Axis")
+    table.add_column("Quote")
+    table.add_column("Objection")
+    table.add_column("Status")
+    for issue in issues:
+        axis = issue.axis if issue.axis_known else f"{issue.axis}?"
+        status = issue.status
+        if issue.by_user:
+            status += " (you)"
+        elif issue.unparsed:
+            status += " (no answer)"
+        table.add_row(
+            str(issue.n),
+            f"Side {issue.against.upper()}",
+            escape(axis),
+            escape(issue.quote),
+            escape(issue.objection),
+            status,
+        )
     console.print(table)
 
 
@@ -386,17 +421,23 @@ class ThinkSeparator:
         return "".join(shown)
 
 
-def display_assistant_stream(token_generator, think_end=None):
+def display_assistant_stream(token_generator, think_end=None, *, label=None, interrupted=None):
     """Print streamed tokens live with word-wrap.
 
     think_end is the tag that closes the model's thinking block, if known; a
     delimiter line is then drawn after it (see ThinkSeparator). The returned text is
     always exactly what the model produced.
 
+    label replaces "Assistant:" in the header line (a /duel side). interrupted is an
+    event-like object with set(): a Ctrl-C then sets it and the text is returned as it
+    stands, without the " [interrupted]" marker, so the caller can tell the turn was cut
+    short. Left None, an interrupt appends the marker, as in a normal turn.
+
     Returns the full response text.
     """
     now_ts = datetime.now().isoformat()
-    console.print(f"[assistant_label]Assistant:[/assistant_label] {now_ts}\n", end="")
+    header = escape(label) if label else "Assistant:"
+    console.print(f"[assistant_label]{header}[/assistant_label] {now_ts}\n", end="")
     full_text = ""
     term_width = console.width or 80
     col = 0  # current column position
@@ -447,7 +488,10 @@ def display_assistant_stream(token_generator, think_end=None):
             _flush_word(word_buf)
             sys.stdout.flush()
     except KeyboardInterrupt:
-        full_text += " [interrupted]"
+        if interrupted is None:
+            full_text += " [interrupted]"
+        else:
+            interrupted.set()
     finally:
         # Account for the last line if it has content
         if col > 0:
