@@ -190,6 +190,33 @@ def with_extra_args(profile, extra):
     return replace(profile, args=_merge(profile.args, _parse_flags(list(extra), "llama_args"), set()))
 
 
+# The one pair of aliases this module knows: the number of slots decides which tests may run.
+PARALLEL_FLAGS = frozenset({"--parallel", "-np"})
+
+
+def profile_parallel(profile, extra=()):
+    """The number of slots the server will have: the profile's args with a test's `extra` merged in.
+
+    Reads `--parallel N` or `-np N` (also `--parallel=N`); if both spellings appear the last one
+    wins, as on a llama-server command line. This is the one place the fixture treats two spellings
+    as the same flag, because tests gate on the slot count. Absent means 1, and so does a
+    non-positive value (llama-server's "auto"), which is not counted on.
+    """
+    count = 1
+    for tokens in with_extra_args(profile, extra).args:
+        name, _, inline = tokens[0].partition("=")
+        if name not in PARALLEL_FLAGS:
+            continue
+        value = inline or (tokens[1] if len(tokens) > 1 else "")
+        try:
+            count = max(int(value), 1)
+        except ValueError:
+            raise LlamaTestConfigError(
+                f"{tokens[0]} in profile {profile.name!r} needs an integer, got {value!r}"
+            ) from None
+    return count
+
+
 def extras_id(extra):
     """A short test-id suffix for a test's extra flags: ('--ctx-size 2048',) -> 'ctx-size-2048'."""
     return "+".join("-".join(item.split()).lstrip("-") for item in extra)

@@ -42,8 +42,10 @@ class Recorder:
 
 
 class FakeStream:
-    def __init__(self, tokens, interrupt_after=None, stats=None, truncated=False):
+    def __init__(self, tokens, interrupt_after=None, stats=None, truncated=False, limited=False):
         self.tokens, self.interrupt_after, self.truncated = tokens, interrupt_after, truncated
+        self.limited = limited
+        self.closed = False
         self.stats = {"completion_tokens": 1} if stats is None else stats
         self.server_model, self.server_n_ctx, self.think_tags, self.model = (
             "/m/x.gguf",
@@ -51,6 +53,9 @@ class FakeStream:
             None,
             "/m/x.gguf",
         )
+
+    def close(self):
+        self.closed = True
 
     def __iter__(self):
         for i, token in enumerate(self.tokens):
@@ -82,11 +87,13 @@ def run_session(
     argv=(),
     setup=None,
     answers=(),
+    on_input=None,
 ):
     """Run main() over `inputs` (None is EOF). check_fit is what client.check_fit returns,
     or an exception to raise from inside the check; a list gives one result per call.
     argv adds command-line arguments; setup(client) runs before main() to script the mock
-    client; answers feed input() (the /remember approval prompt): a string, or an exception to raise."""
+    client; answers feed input() (the /remember approval prompt): a string, or an exception to raise.
+    on_input(prompt, echo_suppressed_active), when given, is called at every input()."""
     session = Session()
     log, infos = session.log, session.infos
     rec = Recorder(log)
@@ -138,6 +145,8 @@ def run_session(
     answers = iter(answers)
 
     def fake_input(prompt=""):
+        if on_input:
+            on_input(prompt, rec.active)
         answer = next(answers)
         if isinstance(answer, BaseException):
             raise answer

@@ -124,6 +124,9 @@ class LlamaClient:
         # What the server is serving, from GET /props (see refresh); None until read.
         self.server_model = None
         self.server_n_ctx = None
+        # Parallel slots the server was started with (/props total_slots); None until
+        # a refresh reads it, and if /props lacks the field.
+        self.server_slots = None
 
     def is_available(self):
         """Check if llama-server is running."""
@@ -184,7 +187,7 @@ class LlamaClient:
     def refresh(self):
         """Re-read what the server is serving with a single GET /props.
 
-        Updates server_model and server_n_ctx, then the thinking tags from the
+        Updates server_model, server_n_ctx and server_slots, then the thinking tags from the
         same response (see detect_think_tags). The previous values are kept
         when /props cannot be read or lacks a field. Never raises.
         """
@@ -196,6 +199,10 @@ class LlamaClient:
             self.server_model = model
         try:
             self.server_n_ctx = int(props["default_generation_settings"]["n_ctx"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            self.server_slots = int(props["total_slots"])
         except (KeyError, TypeError, ValueError):
             pass
         self._detect_think_tags(props)
@@ -304,7 +311,7 @@ class LlamaClient:
         self._think_identity = identity
         self._think_current = (*pair, "detected") if pair else None
 
-    def chat(self, model, messages, options=None, refreshed=False):
+    def chat(self, model, messages, options=None, refreshed=False, id_slot=None):
         """Send a chat request. Returns a LlamaChatStream that yields tokens.
 
         The server applies the model's chat template (/apply-template); the
@@ -324,6 +331,8 @@ class LlamaClient:
                      values are omitted.
             refreshed: True when check_fit() just re-read the server, so this call
                        does not do it again.
+            id_slot: Pins the request to this server slot. Left out of the request
+                     when None, so the server picks the slot as usual.
         """
         if not refreshed:
             self.refresh()
@@ -340,6 +349,8 @@ class LlamaClient:
             for k, v in options.items():
                 if v is not None:
                     payload[k] = v
+        if id_slot is not None:
+            payload["id_slot"] = id_slot
         resp = requests.post(
             f"{self.base_url}/completion",
             json=payload,
@@ -395,6 +406,13 @@ class LlamaChatStream:
         # The model that actually produced the reply, from the final chunk; None
         # if the stream ended (or was interrupted) before that chunk.
         self.model = None
+
+    def close(self):
+        """Drop the connection; a reader blocked on the stream then ends. Never raises."""
+        try:
+            self._response.close()
+        except Exception:
+            pass
 
     def __iter__(self):
         if self._prefix:

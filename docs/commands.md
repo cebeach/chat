@@ -14,6 +14,7 @@ not implemented and answers `Unknown command`; use `/?`.
 | [`/clear`](#clear) | Empty the current conversation |
 | [`/config`](#config) | Show settings; toggle `save_thinking` and `context_check` |
 | [`/conversations`](#conversations) | List saved conversations |
+| [`/duel [--auto] <brief>`](#duel) | Two slots write the same story and challenge each other |
 | [`/exit`](#exit) | Save and quit |
 | [`/info`](#info) | Conversation and context-window statistics |
 | [`/load <name>`](#load-name) | Replace the current conversation with a saved one |
@@ -102,6 +103,15 @@ A project holds its own conversations, system prompt and standing notes; see
 
 A switch resets `/set`, `/config` and `/stats` to the configured values. Tab completes
 the subcommands and project names.
+
+## /duel
+`/duel [--auto] <brief>` has two sides write the same story on two llama-server slots,
+challenge each other's draft, revise once, and lets a judge help you pick one; only the text you
+choose joins the conversation. `/duel` alone shows usage and the slot count, `/duel set <key>
+<value>` changes a setting for the session (`axes`, `stance_a`, `stance_b`, `temperature_a`,
+`temperature_b`, `seed_a`, `seed_b`, `context`, `auto`; `default` resets) and `/duel ledger`
+shows the last duel's issues. Needs `llama-server --parallel 2`. Experimental; see
+[Duel](duel.md).
 
 ## /recall <n>
 Copies the n-th question-and-answer pair (counting from 1) to the end of the

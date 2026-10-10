@@ -24,6 +24,17 @@ def fits(needed, n_ctx, reserve=0):
     return needed + reserve + 1 <= n_ctx
 
 
+def fits_together(needed, idle, n_ctx, reserve=0):
+    """True when prompts that run at the same time fit one shared KV pool.
+
+    `needed` is the prompt size of each participant, `idle` the tokens still held by
+    slots that do not take part, `reserve` the room kept for each participant's reply.
+    Each participant also leaves room for one token (see fits), so a single participant
+    with nothing idle gives exactly fits(needed, n_ctx, reserve).
+    """
+    return sum(n + reserve + 1 for n in needed) + idle <= n_ctx
+
+
 def near_limit(needed, n_ctx):
     """True when the prompt takes more than 80% of the window."""
     return bool(n_ctx) and needed > WARN_SHARE * n_ctx
@@ -74,4 +85,16 @@ def refusal(needed, n_ctx, reserve=0, outcome="Not sent"):
     return (
         f"{outcome}: the prompt would be {needed:,} tokens but the context window is {n_ctx:,}{kept}. "
         "Shorten the text or file, or free space with /clear."
+    )
+
+
+def refusal_together(needed, idle, n_ctx, reserve=0, outcome="Not sent"):
+    """The error shown when prompts that run at the same time do not fit one shared pool."""
+    total = sum(n + reserve + 1 for n in needed)
+    held = f", plus {idle:,} held by the slot that does not take part" if idle else ""
+    kept = f" (each with {reserve:,} kept free for its reply)" if reserve else ""
+    return (
+        f"{outcome}: the {len(needed)} prompts together would need {total:,} tokens{kept}{held}, "
+        f"but the shared context window is {n_ctx:,}. Shorten the brief or the texts; if each slot "
+        "has its own window of that size, use /duel set context split."
     )

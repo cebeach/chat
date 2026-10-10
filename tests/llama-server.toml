@@ -36,6 +36,15 @@ source_url = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main
 think_tags = ["<think>", "</think>"]   # observed on the real model; checked by the integration tests
 vram_mb = 2153                     # memory this profile uses with its exact args, measured on your GPU
 
+# The same model with two slots, for the /duel integration tests (tests marked llama_parallel(2)).
+# Not the first profile, so a plain run keeps loading the profile above only; it has no vram_mb
+# because it was not measured.
+[models.qwen35-2B-Q8_0-parallel2]
+args = ["--parallel 2"]            # replaces the default --parallel 1
+file = "Qwen_Qwen3.5-2B-Q8_0.gguf"
+source_url = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q8_0.gguf"
+think_tags = ["<think>", "</think>"]
+
 [models.gemma-4-E2B-it-Q8_0]
 file = "gemma-4-E2B-it-Q8_0.gguf"
 source_url = "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf"

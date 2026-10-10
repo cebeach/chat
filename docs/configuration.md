@@ -30,6 +30,11 @@ current session only.
 | `n_predict` | int | unset | Longest reply, in tokens (1 or more). Overrides a server `--predict`; it cannot raise it to unlimited. |
 | `context_check` | bool | `true` | Count every prompt with the server before sending and refuse one that cannot fit the context window; warn above 80%. `/config context_check on\|off` changes it for the session. Off means no counting, no refusal and no warning. See [statistics](statistics.md#the-pre-send-check). |
 | `reserve_output_tokens` | int | `0` | Tokens kept free for the reply when deciding whether a prompt fits. It guarantees nothing: the reply length is unbounded unless you set `n_predict` (here, with `/set`, or `--predict` on the server), and a thinking model's is hard to predict. Try a few hundred to a few thousand for a thinking model. An `n_predict` you set is kept free too (the larger of the two); a limit from the server's `--predict` is not, because `/props` does not report it. |
+| `duel_axes` | list of strings | plot, character, dialogue, pacing, voice | Axes the issues of [`/duel`](duel.md) may use. |
+| `duel_stance_a`, `duel_stance_b` | string | plot-driven, character-driven | The instruction that makes the two sides of a duel differ. |
+| `duel_temperature_a`, `duel_temperature_b` | float | unset | Temperature of one side; otherwise `/set temperature` applies to both. |
+| `duel_seed_a`, `duel_seed_b` | int | unset | Seed of one side (`-1`, random, counts as unset). |
+| `duel_context` | `"shared"` or `"split"` | `"shared"` | Whether the two slots share one context pool of the reported size (`--kv-unified`) or each has it to itself; see [duel](duel.md#context). |
 
 TOML has no "unset": leave a key out and nothing is sent for it, so the server's own value
 applies. A model option you do set starts every session as an override that `/set` shows

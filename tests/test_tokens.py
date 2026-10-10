@@ -26,6 +26,24 @@ class TestFits:
         assert tokens.fits(3095, 4096, reserve=1000)
         assert not tokens.fits(3096, 4096, reserve=1000)
 
+    def test_one_participant_with_nothing_idle_equals_fits(self, subtests):
+        for n in (0, 3095, 3096, 4095, 5000):
+            for reserve in (0, 1000):
+                with subtests.test(n=n, reserve=reserve):
+                    assert tokens.fits_together([n], 0, 4096, reserve) == tokens.fits(n, 4096, reserve)
+
+    def test_fits_together_sums_prompts_reserves_and_one_token_each(self):
+        # 2 * (1000 + 500 + 1) = 3002, plus 1000 idle = 4002
+        assert tokens.fits_together([1000, 1000], 1000, 4002, reserve=500)
+        assert not tokens.fits_together([1000, 1000], 1000, 4001, reserve=500)
+
+    def test_idle_tokens_count_against_the_pool(self):
+        assert tokens.fits_together([1000], 3000, 4001)
+        assert not tokens.fits_together([1000], 3001, 4001)
+
+    def test_each_side_alone_may_fit_while_together_they_do_not(self):
+        assert tokens.fits(3000, 4096) and not tokens.fits_together([3000, 3000], 0, 4096)
+
     def test_near_limit_is_above_80_percent(self):
         assert not tokens.near_limit(209715, 262144)
         assert tokens.near_limit(209716, 262144)

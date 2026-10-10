@@ -94,7 +94,9 @@ tokenizer. For each message it makes these calls:
 
 1. **Window.** `GET /props` re-reads the context window the server is using right now, so
    a server restarted with another `-c` is noticed. This is the per-slot size, the limit one
-   request must fit.
+   request must fit. (With `--kv-unified` the slots share one pool and `/props` reports the
+   whole pool as each slot's size, so several requests that each fit can still exceed it
+   together; [`/duel`](duel.md#context) checks the pool and normal messages do not need to.)
 2. **Candidate.** The prompt is the system prompt, the stored messages and the new message,
    exactly as they will be sent: role and text only. A reply's stored reasoning is not
    included, and neither is an empty reply with the question before it, because those are

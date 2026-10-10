@@ -35,13 +35,13 @@ venv/bin/python -m pytest tests/test_load.py::TestLoadMergesRecordedThinkPairs  
 
 Tests are pytest style (plain `assert`, `tmp_path`, `subtests`); mocking stays on `unittest.mock`. Fixtures and fakes shared between files live in `tests/helpers.py`.
 
-Tests marked `integration` start a real llama-server (profiles in `tests/llama-server.toml`) and are skipped unless a models directory is configured. They are serial and always use port 8001, so a plain `pytest` fails on a configured machine while your own llama-server is running there; use `-m "not integration"` then. A plain run exercises the first profile only; `--llama-model all` (or a comma-separated list) runs every profile, one server after another. See `docs/testing.md`.
+Tests marked `integration` start a real llama-server (profiles in `tests/llama-server.toml`) and are skipped unless a models directory is configured. They are serial and always use port 8001, so a plain `pytest` fails on a configured machine while your own llama-server is running there; use `-m "not integration"` then. A plain run exercises the first profile only; `--llama-model all` (or a comma-separated list) runs every profile, one server after another. A test marked `llama_parallel(2)` (the `/duel` integration tests) runs only on profiles whose effective `--parallel` is at least 2 and is otherwise skipped with a reason; run them with `--llama-model qwen35-2B-Q8_0-parallel2`. See `docs/testing.md`.
 
-`tests/test_prompt_pty.py` and `tests/test_repl_integration.py` run the real prompt, and the real `chat.py`, on a pseudo-terminal (`tests/pty_helpers.py`; stdlib only, no new dependency). `tests/test_turn_echo.py` pins which part of a turn `echo_suppressed()` wraps. Its `run_session()` runs the real `main()` over a mock client with scripted input (also used by `tests/test_project_session.py` for projects and `/remember`).
+`tests/test_prompt_pty.py` and `tests/test_repl_integration.py` run the real prompt, and the real `chat.py`, on a pseudo-terminal (`tests/pty_helpers.py`; stdlib only, no new dependency). `tests/test_turn_echo.py` pins which part of a turn `echo_suppressed()` wraps. Its `run_session()` runs the real `main()` over a mock client with scripted input (also used by `tests/test_project_session.py` for projects and `/remember`, and by `tests/test_duel_session.py` for `/duel` with `SlotScript` from `tests/helpers.py`, which hands out scripted replies per `id_slot`). `tests/test_duel_phase.py` runs `_run_phase` directly over scripted slots.
 
 ## Architecture
 
-Air-gapped terminal chat app talking to a local llama.cpp server. Eight source files, no package structure:
+Air-gapped terminal chat app talking to a local llama.cpp server. Nine source files, no package structure:
 
 - **`chat.py`** — Entry point. Parses args, runs the REPL loop, dispatches slash commands via `handle_command()`.
 - **`config.py`** — Loads `~/.config/chat/config.toml` (stdlib `tomllib`), merges with `DEFAULTS` dict.
@@ -50,11 +50,12 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Eight source f
 - **`ui.py`** — All terminal I/O via Rich. Streaming display writes raw tokens with word-wrap (it does not re-render as Markdown). The prompt is a plain `>>> ` read by readline (`get_user_input()`); `echo_suppressed()` keeps the tty from echoing keys typed during a model turn and must never be held across `input()` (readline entered with ECHO off draws nothing). Readline integration for input history and tab-completion of commands and conversation names.
 - **`tokens.py`** — Token accounting against the context window: `fits`, `near_limit`, the `/info` `breakdown`. Pure logic over `LlamaClient.count_tokens` / `prompt_tokens` / `check_fit` (`/tokenize` and `/apply-template`); `chat.py` runs the check before every send and `/system`.
 - **`projects.py`** — Named projects (`docs/projects.md`): a directory with `project.md` (notes), `system.md` (system prompt), `project.toml` (allowed overrides) and `conversations/`. Stdlib, file I/O and pure logic only: name checks, atomic `write_notes`, `diff_text`, the `/remember` prompt and `clean_reply`. `chat.py` holds the switching (`_switch_project`, `_reload_project`, `_sync_notes`) and `/remember`; `Conversation.project_notes` rides in the system message and is never saved.
+- **`duel.py`** — `/duel` (`docs/duel.md`): stdlib, pure logic like `projects.py`. The fixed phase sequence and who takes part in each phase, the issue `Ledger` (its transition table is the only way a status changes), prompt builders, lenient parsers, side options, the `/duel` argument parser and the atomic record file. `chat.py` runs it: `_run_phase` (threads only exist inside it, one per participant, handing results to the main thread through queues; a phase that ends abnormally is discarded whole) and `_handle_duel`. Sides are built with `duel.new_conversation`, never `chat.Conversation`.
 - **`conv2txt.py`** — Standalone CLI utility to convert saved conversation JSON to plain text.
 
 ### Documentation
 
-`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too; project behavior is described in `docs/projects.md`. `docs/testing.md` is for developers (the real-server test fixtures), is not part of the user guide, and must be updated when the profile format, the local settings or the fixture behavior changes.
+`docs/user-guide.md` indexes the user docs. When a slash command, config key or CLI flag changes, update `docs/commands.md` / `docs/configuration.md` and the `README.md` feature list too; project behavior is described in `docs/projects.md`, `/duel` in `docs/duel.md`. `docs/testing.md` is for developers (the real-server test fixtures), is not part of the user guide, and must be updated when the profile format, the local settings or the fixture behavior changes.
 
 ### Data flow
 

@@ -222,6 +222,48 @@ flag.
   `--llama-model all` repeats it for every profile.
 - A bad flag fails when the server is needed, as an error naming the cause, never at collection.
 
+### Tests that need two slots: `llama_parallel`
+
+The `/duel` integration tests need a server with at least two slots. A test marks itself:
+
+```python
+@pytest.mark.integration
+@pytest.mark.llama_parallel(2)          # the minimum slot count; 2 when no number is given
+def test_something_with_two_slots(llama_server, llama_client): ...
+```
+
+The test runs only on selected profiles whose **effective** `--parallel` (the defaults merged
+with the profile and with the test's `llama_args`, exactly as the server is started) is at
+least that number; the others are not run for it, and nothing fails. If no selected profile
+qualifies the test is skipped, and the reason names the marker and every profile checked with
+its slot count. So a plain run (first profile only, one slot) skips these tests and stays green.
+
+The slot count is read from `--parallel N` or `-np N` (also `--parallel=N`); if both spellings
+appear the last one wins, as on a llama-server command line. This is the one place the fixture
+treats two spellings as the same flag, an exception to "aliases are not matched" above. A
+missing flag, or a non-positive value ("auto"), counts as one slot. A test that adds
+`llama_args("--parallel 2")` to a one-slot profile qualifies; one that lowers the count does not.
+
+The profile `qwen35-2B-Q8_0-parallel2` is the first profile's model (same GGUF, `source_url` and
+`think_tags`) with `args = ["--parallel 2"]`, which replaces the default `--parallel 1`. It is
+not the first profile, so a plain run is unchanged; run the two-slot tests with:
+
+```bash
+venv/bin/python -m pytest -m integration --llama-model qwen35-2B-Q8_0-parallel2
+```
+
+That runs every integration test on the two-slot profile, so it loads this model a second time
+in `--llama-model all`. Other profiles opt in with the same one line. The default flags include
+`--kv-unified`, so the profile exercises the `shared` pool rule of [`/duel`](duel.md#context).
+
+`tests/test_duel_integration.py` asserts structure only: the server reports `total_slots` equal
+to its `--parallel` and `n_ctx` equal to `--ctx-size`, and a real `/duel --auto` on a pty ends
+in a legal outcome read from the duel record's `ended` and `choice` fields (a small model may
+be cut off, which the design allows, so completion is not assumed), with both slots shown
+handling requests in the server log. It marks itself `llama_args("--reasoning off")`: a small
+reasoning model can spend the whole shared pool thinking about a draft prompt. The scripted
+happy path is pinned offline in `tests/test_duel_session.py`.
+
 To add a profile, add a `[models.<name>]` table with `file` (and, as a record, `source_url`), add any flags it needs under
 `args`, and run it once with `--llama-model <name>` (or add it to a run with `all`).
 
@@ -358,8 +400,9 @@ directory is not deleted by the fixture, and pytest keeps the last three runs.
 
 ## Skips and errors
 
-There is exactly one skip: **no models directory is configured**, meaning this machine is
-not set up for integration tests. Setting a models directory is how you ask for them, so
+There are two skips. The first is **no models directory is configured**, meaning this machine is
+not set up for integration tests. (The second is a test marked `llama_parallel` when no selected
+profile has enough slots; see above.) Setting a models directory is how you ask for them, so
 from then on a problem is an error that names its cause:
 
 | Situation | Result |
@@ -431,6 +474,8 @@ paste details, `fg` after Ctrl-Z, what `stty -a` shows). Check those by hand; `d
 | `tests/pty_helpers.py` | Runs a child process on a pty: controlling terminal, throwaway `HOME`, prompt counting, holds, tty flags |
 | `tests/test_prompt.py`, `tests/test_turn_echo.py`, `tests/test_prompt_pty.py`, `tests/test_repl_integration.py` | The prompt and echo tests (see [Pseudo-terminal tests](#pseudo-terminal-tests-the-prompt-and-the-tty)) |
 | `tests/test_think_tags_integration.py` | Thinking-tag detection and a real reply, checked against each real model (see [Thinking-tag tests](#thinking-tag-tests)) |
+| `tests/test_duel.py`, `test_duel_config.py`, `test_duel_display.py`, `test_duel_phase.py`, `test_duel_session.py` | Offline tests of `/duel`: the pure logic, the settings, the display, one concurrent phase over scripted slots (`SlotScript` in `tests/helpers.py`), and whole duels through the real `main()` |
+| `tests/test_duel_integration.py` | `integration`, `llama_parallel(2)`: the slot count and pool of a two-slot server, and a real `/duel` (see [Tests that need two slots](#tests-that-need-two-slots-llama_parallel)) |
 | `tests/test_sampling_options_integration.py` | `integration`: the sampling options against a server started with known launch flags, all passed with `llama_args` (`--temp`, `--top-p`, `--min-p`, `--repeat-penalty`, `--seed`, `--predict`): `/props` reports them, `/set` shows them as the server value, an override reaches `/completion` (an `n_predict` cap, a different seed), and the real `chat.py` on a pty shows and applies them. A second class with other flags checks that `/set` follows the launch flags. It loads the model twice, once per distinct flag set. `/props` always reports `n_predict` as -1, and a test pins that, so a llama.cpp that starts reporting it is noticed |
 
 The offline tests never touch port 8001, your real `tests/llama-server.local.toml` or the

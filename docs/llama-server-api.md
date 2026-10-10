@@ -99,13 +99,14 @@ start the app again.
 
 ### `GET /props`
 
-Returns a JSON object describing the running server. AI Chat reads four things from it:
+Returns a JSON object describing the running server. AI Chat reads these from it:
 
 | Field | Used for |
 |---|---|
 | `model_alias` (else `model_path`) | The model name shown in the welcome line, `/config`, and the "model: old → new" notice, and recorded with each reply |
 | `default_generation_settings.n_ctx` | The context window (per slot), for the token check and `/info` |
 | `default_generation_settings.params` | The sampling options the server was launched with (`temperature`, `top_p`, `min_p`, `repeat_penalty`, `seed`, ...), shown by `/set`. These are launch defaults only: `/props` never reflects what a request sent. `seed` unset is the unsigned `4294967295`, and floats are widened from 32 bits (`0.95` arrives as `0.949999988...`). `n_predict` is always `-1` here, even with `--predict`, so it is not used |
+| `total_slots` | The number of slots (`--parallel`), which [`/duel`](duel.md) needs to be 2 or more. Absent or unreadable means unknown |
 | `chat_template` | The template's source text, used together with the model path to recognize which model is running (a change means a different model) and to help find its thinking tags |
 
 ```bash
@@ -177,6 +178,10 @@ What AI Chat sends:
   "temperature": 0.3
 }
 ```
+
+`id_slot` (the slot the request must run on) is sent only by [`/duel`](duel.md), which pins its
+two sides to slots 0 and 1; a normal message leaves the choice to the server and its body has no
+such field.
 
 `seed`, `temperature`, `top_p`, `min_p`, `repeat_penalty` and `n_predict` are included only
 when you set them (with `/set` or in the config file); otherwise the server's own values
@@ -254,7 +259,7 @@ step 2 cancels the message with "Cancelled."
 | `-m <file>` | Which model. The app follows it |
 | `--port`, `--host` | Where to find the server (`--url` in the app). The default host, `127.0.0.1`, accepts only connections from the same machine |
 | `-c` / `--ctx-size` | The context window. A bigger window holds a longer conversation and uses more memory |
-| `-np` / `--parallel` | Number of slots. The window one request can use is the per-slot size |
+| `-np` / `--parallel` | Number of slots. The window one request can use is the per-slot size. `/duel` needs at least 2 |
 | `--context-shift` | Off by default. When on, the server may drop old tokens from a long reply to keep going. The app's token check assumes it is off |
 | `--api-key` | The app sends no key, so a server started with one refuses its requests. Do not use it with AI Chat |
 

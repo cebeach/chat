@@ -32,6 +32,9 @@ class FakeResponse:
     def iter_lines(self):
         return iter(self._lines)
 
+    def close(self):
+        self.closed = True
+
 
 def sse(**fields):
     return ("data: " + json.dumps(fields)).encode()
@@ -147,6 +150,18 @@ class TestRefresh:
             self.client.refresh()
         assert (self.client.server_model, self.client.server_n_ctx) == ("other.gguf", 4096)
 
+    def test_reads_the_slot_count_and_keeps_it_when_props_lacks_it(self):
+        assert self.client.server_slots is None
+        with props_patch():
+            self.client.refresh()
+        assert self.client.server_slots is None  # /props without total_slots
+        with props_patch({**PROPS, "total_slots": 2}):
+            self.client.refresh()
+        assert self.client.server_slots == 2
+        with props_patch():
+            self.client.refresh()
+        assert self.client.server_slots == 2
+
     def test_the_override_makes_no_template_calls_but_still_reads_props(self):
         with props_patch() as get, mock.patch("requests.post") as post:
             self.client.refresh()
@@ -228,6 +243,30 @@ class TestClient:
         assert second.kwargs["stream"]
         assert list(stream) == []
         assert stream.think_tags == ("<think>", "</think>", "config")
+
+    def test_id_slot_is_sent_only_when_given(self):
+        for kwargs, expected in (
+            ({}, None),
+            ({"id_slot": None}, None),
+            ({"id_slot": 0}, 0),
+            ({"id_slot": 1}, 1),
+        ):
+            responses = [FakeResponse({"prompt": "p"}), FakeResponse(lines=[])]
+            with props_patch(), mock.patch("requests.post", side_effect=responses) as post:
+                self.client.chat("m", [{"role": "user", "content": "hi"}], **kwargs)
+            body = post.call_args_list[1].kwargs["json"]
+            if expected is None:
+                assert "id_slot" not in body
+            else:
+                assert body["id_slot"] == expected
+
+    def test_stream_close_closes_the_response_and_never_raises(self):
+        response = FakeResponse(lines=[])
+        LlamaChatStream(response).close()
+        assert response.closed
+        broken = mock.Mock()
+        broken.close.side_effect = OSError("gone")
+        LlamaChatStream(broken).close()
 
     def test_chat_attaches_what_the_server_reported_for_this_request(self):
         responses = [FakeResponse({"prompt": "p"}), FakeResponse(lines=[])]
