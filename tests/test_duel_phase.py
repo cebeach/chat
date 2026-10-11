@@ -1,4 +1,4 @@
-"""chat._run_phase: one phase of a duel over scripted slots (no server, no main loop).
+"""duel_session._run_phase: one phase of a duel over scripted slots (no server, no main loop).
 
 Assertions use the per-slot sequences of SlotScript, never the interleaving of the two sides.
 """
@@ -11,10 +11,11 @@ from requests.exceptions import ConnectionError, HTTPError
 
 import chat
 import duel
-from chat import State, _Job, _run_phase
+from chat import State
 from config import DEFAULTS
 from conversation import Conversation
 from duel import Phase
+from duel_session import _Job, _run_phase
 from tests.helpers import Reply, SlotScript
 from tests.test_turn_echo import Recorder
 
@@ -46,7 +47,9 @@ class Env:
 
     def run(self, phase, *keys, text="go"):
         with mock.patch.object(chat, "echo_suppressed", Recorder(self.log)):
-            return _run_phase(phase, self.jobs(*keys, text=text), self.client, self.state, self.held)
+            return _run_phase(
+                phase, self.jobs(*keys, text=text), self.client, self.state, self.held, chat._duel_host()
+            )
 
 
 def roles(conversation):

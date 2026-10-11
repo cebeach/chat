@@ -12,6 +12,7 @@ import pytest
 
 import chat
 import duel
+import duel_session as duel_module
 from conversation import Conversation
 from tests.helpers import Reply, SlotScript
 from tests.test_turn_echo import run_session
@@ -26,7 +27,7 @@ class NoShuffle:
 
 @pytest.fixture(autouse=True)
 def fixed_judge_order():
-    with mock.patch.object(chat, "_duel_rng", NoShuffle()):
+    with mock.patch.object(duel_module, "_duel_rng", NoShuffle()):
         yield
 
 
