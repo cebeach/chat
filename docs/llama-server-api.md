@@ -38,9 +38,22 @@ the server's own tokenizer can count them exactly.
 system prompt, the whole conversation so far, the new message, and the reply being written
 all share it. You set it when starting the server with `-c` / `--ctx-size`. With `-c 0`
 (the default) the server uses the size the model was trained for, which can be very large
-and take a lot of memory. With several parallel *slots* (`-np` / `--parallel`; a slot is
-one request being worked on), the window one request can use is the per-slot size. That
-per-slot size is the figure the server reports and the one the app uses.
+and take a lot of memory.
+
+`--ctx-size` is the server's *total* memory for conversation tokens (the KV cache), not a
+per-request figure. A *slot* (`-np` / `--parallel`) is one request being worked on, and
+the total is divided among the slots:
+
+- By default each slot gets an equal, fixed share: `--ctx-size` divided by `--parallel`.
+- With `--kv-unified` the slots share one pool of `--ctx-size` tokens instead. One slot
+  can use most of it while the other is idle, but the requests running at the same time
+  must fit in the pool together.
+
+Either way, a slot is never allowed more than the model's trained context length. So to
+give every slot the full trained length, set `--ctx-size` to the trained length times the
+number of slots. For a model trained on 262,144 tokens and two slots, that is
+`--ctx-size 524288 --parallel 2`. The per-slot size is the figure the server reports and
+the one the app uses.
 
 **The chat template.** A chat model was trained on conversations written in a specific
 format: role markers, special tokens, a marker that says "the assistant speaks now". That
@@ -259,8 +272,9 @@ step 2 cancels the message with "Cancelled."
 |---|---|
 | `-m <file>` | Which model. The app follows it |
 | `--port`, `--host` | Where to find the server (`--url` in the app). The default host, `127.0.0.1`, accepts only connections from the same machine |
-| `-c` / `--ctx-size` | The context window. A bigger window holds a longer conversation and uses more memory |
-| `-np` / `--parallel` | Number of slots. The window one request can use is the per-slot size. `/duel` needs at least 2 |
+| `-c` / `--ctx-size` | The total context memory, shared by all slots (see [the context window](#four-ideas-you-need)). A bigger value holds longer conversations and uses more memory |
+| `-np` / `--parallel` | Number of slots. Without `--kv-unified` each slot gets `--ctx-size` divided by this number. `/duel` needs at least 2 |
+| `--kv-unified` | The slots share one pool of `--ctx-size` tokens instead of fixed shares, so the requests running at once must fit in it together. If `--ctx-size` is larger than the model's trained length, the server logs `n_ctx_seq (…) > n_ctx_train (…) -- possible training context overflow`. This is expected and harmless: each slot is still capped at the trained length |
 | `--context-shift` | Off by default. When on, the server may drop old tokens from a long reply to keep going. The app's token check assumes it is off |
 | `--api-key` | The app sends no key, so a server started with one refuses its requests. Do not use it with AI Chat |
 
