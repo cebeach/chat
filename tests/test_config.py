@@ -73,6 +73,50 @@ class TestLoadConfigChecked:
             assert config.load_config() == config.load_config_checked()[0]
 
 
+class TestWrongValues:
+    @pytest.mark.parametrize(
+        ("key", "value", "why"),
+        [
+            ("auto_save", '"no"', "must be true or false"),
+            ("save_thinking", "1", "must be true or false"),
+            ("context_check", '"yes"', "must be true or false"),
+            ("llama_url", "5", "must be a string"),
+            ("projects_dir", "true", "must be a string"),
+            ("server_log_dir", "[1]", "must be a string"),
+            ("think_start", "2", "must be a string"),
+            ("system_prompt", "1.5", "must be a string"),
+            ("reserve_output_tokens", "-1", "must be an integer >= 0"),
+            ("reserve_output_tokens", "true", "must be an integer >= 0"),
+            ("reserve_output_tokens", '"10"', "must be an integer >= 0"),
+        ],
+    )
+    def test_a_wrong_value_is_dropped_reported_and_defaulted(self, tmp_path, key, value, why):
+        loaded, problems = load_checked(tmp_path, f"{key} = {value}\ntemperature = 0.2\n")
+        assert problems == [f"config.toml: {key} {why}; ignored."]
+        assert loaded[key] == DEFAULTS[key]
+        assert loaded["temperature"] == 0.2
+
+    def test_right_values_are_kept(self, tmp_path):
+        text = 'auto_save = false\nllama_url = "http://x:1"\nreserve_output_tokens = 0\nserver_log = ""\n'
+        loaded, problems = load_checked(tmp_path, text)
+        assert problems == []
+        assert loaded["auto_save"] is False
+        assert loaded["llama_url"] == "http://x:1"
+
+    def test_wrong_values_come_in_file_order_before_unknown_keys(self, tmp_path):
+        _, problems = load_checked(tmp_path, 'auto_save = "no"\nzzqx = 1\nllama_url = 5\n')
+        assert problems == [
+            "config.toml: auto_save must be true or false; ignored.",
+            "config.toml: llama_url must be a string; ignored.",
+            'config.toml: unknown key "zzqx" is ignored.',
+        ]
+
+    def test_the_sampling_and_duel_keys_are_left_to_their_own_check(self):
+        clean, lines = config.wrong_values({"temperature": "hot", "duel_context": 3}, "config.toml")
+        assert clean == {"temperature": "hot", "duel_context": 3}
+        assert lines == []
+
+
 class TestMainReportsThem:
     def run_main(self, tmp_path, text):
         parent = mock.Mock()
@@ -96,6 +140,13 @@ class TestMainReportsThem:
         calls = self.run_main(tmp_path, 'server-log-dir = "~/x"\n')
         assert [c[0] for c in calls] == ["warning", "error"]
         assert 'did you mean "server_log_dir"?' in calls[0].args[0]
+
+    def test_wrong_values_warn_and_main_does_not_crash(self, tmp_path):
+        # llama_url = 5 would raise AttributeError in the real LlamaClient; it is dropped first.
+        calls = self.run_main(tmp_path, 'auto_save = "no"\nllama_url = 5\n')
+        assert [c[0] for c in calls] == ["warning", "warning", "error"]
+        assert "auto_save must be true or false" in calls[0].args[0]
+        assert "llama_url must be a string" in calls[1].args[0]
 
     def test_a_clean_file_warns_about_nothing(self, tmp_path):
         calls = self.run_main(tmp_path, "temperature = 0.2\n")

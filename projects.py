@@ -98,12 +98,12 @@ def unknown_settings(data, ignored):
 
 
 def load_settings_checked(path):
-    """(settings, ignored, unknown): the allowed keys of project.toml, the known-removed keys
-    that were dropped, and one printable line per other key that was dropped.
+    """(settings, ignored, problems): the allowed keys of project.toml, the known-removed keys
+    that were dropped, and one printable line per other key or wrong-typed value that was dropped.
 
     A missing file gives ({}, [], []). `ignored` lists known-removed keys the user should
     move (currently system_prompt). Raises ValueError naming the file when it is not
-    valid TOML or a value is wrong.
+    valid TOML. A wrong-typed value is dropped and reported in `problems`.
     """
     file = Path(path) / "project.toml"
     if not file.is_file():
@@ -113,14 +113,9 @@ def load_settings_checked(path):
             data = tomllib.load(f)
     except (tomllib.TOMLDecodeError, OSError) as exc:
         raise ValueError(f"{file}: {exc}") from exc
-    settings = {k: data[k] for k in ALLOWED_SETTINGS if k in data}
-    if "context_check" in settings and not isinstance(settings["context_check"], bool):
-        raise ValueError(f"{file}: context_check must be true or false")
-    reserve = settings.get("reserve_output_tokens", 0)
-    if isinstance(reserve, bool) or not isinstance(reserve, int) or reserve < 0:
-        raise ValueError(f"{file}: reserve_output_tokens must be an integer >= 0")
+    settings, wrong = config.wrong_values({k: data[k] for k in ALLOWED_SETTINGS if k in data}, file.name)
     ignored = [k for k in ("system_prompt",) if k in data]
-    return settings, ignored, unknown_settings(data, ignored)
+    return settings, ignored, unknown_settings(data, ignored) + wrong
 
 
 def load_settings(path):

@@ -102,12 +102,19 @@ class TestSettings:
             projects.load_settings(tmp_path)
 
     @pytest.mark.parametrize(
-        "line", ['context_check = "yes"', "reserve_output_tokens = -1", "reserve_output_tokens = true"]
+        ("line", "key", "why"),
+        [
+            ('context_check = "yes"', "context_check", "must be true or false"),
+            ("reserve_output_tokens = -1", "reserve_output_tokens", "must be an integer >= 0"),
+            ("reserve_output_tokens = true", "reserve_output_tokens", "must be an integer >= 0"),
+        ],
     )
-    def test_a_wrong_type_is_an_error(self, tmp_path, line):
-        (tmp_path / "project.toml").write_text(line + "\n")
-        with pytest.raises(ValueError, match="project.toml"):
-            projects.load_settings(tmp_path)
+    def test_a_wrong_type_is_dropped_and_reported(self, tmp_path, line, key, why):
+        (tmp_path / "project.toml").write_text(line + "\ntop_p = 0.9\n")
+        settings, ignored, problems = projects.load_settings_checked(tmp_path)
+        assert settings == {"top_p": 0.9}
+        assert ignored == []
+        assert problems == [f"project.toml: {key} {why}; ignored."]
 
     def test_apply_project_lays_settings_over_a_copy(self):
         base = {**DEFAULTS, "temperature": 1.0}

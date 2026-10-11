@@ -169,7 +169,7 @@ def _initial_options(config, source="config.toml", quiet=False):
             options[key] = _validated(key, config[key])
         except ValueError as exc:
             if not quiet:
-                display_error(f"{source}: {key} {exc}; ignored.")
+                display_warning(f"{source}: {key} {exc}; ignored.")
     return options
 
 
@@ -184,7 +184,7 @@ def _initial_duel(config, source="config.toml", quiet=False):
 
     def bad(key, why):
         if not quiet:
-            display_error(f"{source}: duel_{key} {why}; ignored.")
+            display_warning(f"{source}: duel_{key} {why}; ignored.")
 
     axes = config.get("duel_axes", duel.DEFAULT_AXES)
     if isinstance(axes, list) and axes and all(isinstance(a, str) and a.strip() for a in axes):
@@ -643,7 +643,7 @@ def _read_scope(name, state):
         display_error(f"No project named '{name}'. Create it with /project new {name}.")
         return None
     try:
-        settings, ignored, unknown = projects.load_settings_checked(path)
+        settings, ignored, problems = projects.load_settings_checked(path)
         prompt = projects.read_system_prompt(path)
         notes = projects.read_notes(path)
     except (ValueError, OSError, UnicodeDecodeError) as exc:
@@ -654,7 +654,7 @@ def _read_scope(name, state):
         "dir": path,
         "settings": settings,
         "ignored": ignored,
-        "unknown": unknown,
+        "problems": problems,
         "prompt": prompt,
         "notes": notes,
     }
@@ -691,7 +691,7 @@ def _announce_scope(scope, client, conversation):
         return
     for key in scope["ignored"]:
         display_info(f"project.toml: {key} is ignored; put the system prompt in system.md.")
-    for line in scope["unknown"]:
+    for line in scope["problems"]:
         display_warning(line)
     notes = conversation.project_notes
     if not notes:

@@ -2,7 +2,8 @@
 
 Settings come from `~/.config/chat/config.toml`. The file is optional; a missing file
 or key falls back to the default. Unknown keys are ignored and reported at
-startup, with the closest known key when there is one. Order of precedence:
+startup, with the closest known key when there is one; so is a value of the wrong type
+(`auto_save = "no"`, `llama_url = 5`), and the key falls back to its default. Order of precedence:
 
 1. `--url` on the command line (only for the server URL)
 2. the active [project's](projects.md) `project.toml` (only the sampling options, `context_check` and `reserve_output_tokens`)

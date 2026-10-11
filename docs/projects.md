@@ -34,7 +34,9 @@ project selected the app behaves exactly as before.
   Everything else (the server URL, saving, thinking) stays global. Unknown keys are
   ignored and reported when you enter the project or run `/project reload`, and a global key
   such as `llama_url` is reported as global; a `system_prompt` key is ignored with a note,
-  because the prompt lives in `system.md`.
+  because the prompt lives in `system.md`. A value of the wrong type (`context_check = "yes"`,
+  `temperature = "hot"`) is reported by name and ignored too; the project still opens and the
+  global value applies. Only a file that is not valid TOML refuses the project.
 
 ```toml
 temperature = 0.7

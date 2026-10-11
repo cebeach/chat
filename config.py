@@ -68,16 +68,64 @@ def unknown_keys(file_config):
     return [(key, suggest_key(key, DEFAULTS)) for key in file_config if key not in DEFAULTS]
 
 
+def _is_bool(value):
+    return isinstance(value, bool)
+
+
+def _is_str(value):
+    return isinstance(value, str)
+
+
+def _is_count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+# The keys whose value is checked here, by type; reserve_output_tokens also has to be >= 0.
+# The sampling options and the duel_* keys are not listed: chat._initial_options and
+# chat._initial_duel check and report those (they carry range rules), so no key is
+# checked in two places.
+VALUE_RULES = {
+    "system_prompt": (_is_str, "must be a string"),
+    "llama_url": (_is_str, "must be a string"),
+    "conversations_dir": (_is_str, "must be a string"),
+    "projects_dir": (_is_str, "must be a string"),
+    "server_log_dir": (_is_str, "must be a string"),
+    "server_log": (_is_str, "must be a string"),
+    "auto_save": (_is_bool, "must be true or false"),
+    "save_thinking": (_is_bool, "must be true or false"),
+    "think_start": (_is_str, "must be a string"),
+    "think_end": (_is_str, "must be a string"),
+    "context_check": (_is_bool, "must be true or false"),
+    "reserve_output_tokens": (_is_count, "must be an integer >= 0"),
+}
+
+
+def wrong_values(data, source):
+    """(clean, lines): `data` without the entries of VALUE_RULES whose value is the wrong type,
+    and one printable line per dropped entry, in file order. Other keys pass through."""
+    clean = {}
+    lines = []
+    for key, value in data.items():
+        accepts, description = VALUE_RULES.get(key, (None, None))
+        if accepts is None or accepts(value):
+            clean[key] = value
+        else:
+            lines.append(f"{source}: {key} {description}; ignored.")
+    return clean, lines
+
+
 def load_config_checked():
     """(config, problems): the config as load_config() returns it, and one printable line per
-    unknown key in the file (which is otherwise ignored)."""
+    unknown key and per wrong-typed value in the file (each is ignored)."""
     config = dict(DEFAULTS)
     problems = []
 
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "rb") as f:
             file_config = tomllib.load(f)
-        config.update({k: file_config[k] for k in DEFAULTS if k in file_config})
+        known, wrong = wrong_values({k: v for k, v in file_config.items() if k in DEFAULTS}, CONFIG_FILE.name)
+        config.update(known)
+        problems.extend(wrong)
         for key, suggestion in unknown_keys(file_config):
             hint = f'; did you mean "{suggestion}"?' if suggestion else "."
             problems.append(f'{CONFIG_FILE.name}: unknown key "{key}" is ignored{hint}')
@@ -90,7 +138,7 @@ def load_config():
 
     Returns a dict with all config keys guaranteed present.
     Missing file or keys silently fall back to defaults; load_config_checked() also
-    reports the unknown ones.
+    reports the unknown keys and the wrong-typed values (which fall back too).
     """
     return load_config_checked()[0]
 
