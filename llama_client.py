@@ -377,8 +377,8 @@ class LlamaChatStream:
     """Iterable wrapper over a streaming /completion response (SSE).
 
     After iteration, .stats contains completion_tokens, prompt_tokens,
-    context_tokens (prompt + completion: the context in use once the reply is
-    done), eval_duration_ns and (when reported) tokens_per_second, taken from the
+    context_tokens (the context in use once the reply is done: the server's
+    tokens_cached, else prompt + completion), eval_duration_ns and (when reported) tokens_per_second, taken from the
     server's final chunk. It stays empty if the stream ends without one.
 
     truncated is True when that final chunk says the context window filled up
@@ -441,9 +441,14 @@ class LlamaChatStream:
         timings = final.get("timings", {})
         completion_tokens = final.get("tokens_predicted", 0)
         prompt_tokens = final.get("tokens_evaluated", 0)
+        # What the slot holds now. Measured against llama-server, it is prompt + completion - 1
+        # (the last sampled token is never fed back, so it is not cached); with --context-shift
+        # it can be lower still. Without tokens_cached, the sum is the closest figure.
+        cached = final.get("tokens_cached")
+        context_tokens = cached if isinstance(cached, int) else prompt_tokens + completion_tokens
         self.stats = {
             "completion_tokens": completion_tokens,
-            "context_tokens": prompt_tokens + completion_tokens,
+            "context_tokens": context_tokens,
             "eval_duration_ns": int(timings.get("predicted_ms", 0) * 1e6),
             "prompt_tokens": prompt_tokens,
         }

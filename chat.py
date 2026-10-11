@@ -1993,7 +1993,7 @@ def main():
                         if chat_stream.truncated:
                             display_truncated_warning(not conversation.messages[-1]["content"])
                         if state.show_stats:
-                            display_stats(chat_stream.stats)
+                            display_stats(chat_stream.stats, state.context_length)
                         _auto_save(conversation, state)
                     except KeyboardInterrupt:
                         console.print()

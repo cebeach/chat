@@ -30,7 +30,7 @@ an instruction-tuned model; see [Choosing a model](models.md).
 ```
 >>> Explain what a context window is in two sentences.
 Assistant: ...
-  58 generated (thinking + answer) | 41.0 tok/s | 31 prompt tokens
+  58 generated | 41.0 tok/s | 31 prompt tok | ctx: 88 / 8,192 (1.1%)
 >>> /save context-notes
 Conversation saved: /home/you/.local/share/chat/conversations/context-notes.json
 >>> /exit

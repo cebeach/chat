@@ -29,7 +29,7 @@ A Python chat application that provides a terminal-based interface for chatting 
 - **Duel** (experimental) — `/duel <brief>` has two llama-server slots write the same story, cross-examine each other, revise once and lets a judge help you pick; needs `--parallel 2`; see [docs/duel.md](docs/duel.md)
 - **Recall and retry** — `/recall <n>` re-injects an older exchange; `/retry` regenerates the last reply
 - **Context check** — every prompt is counted exactly by the server before it is sent: one that cannot fit the window is refused (nothing is lost), one over 80% warns; `/info` breaks the prompt down by system prompt, your messages and replies (`context_check`, `reserve_output_tokens`)
-- **Stats** — tokens/sec, generated and prompt tokens after each reply (`/stats` toggles), and `/info`
+- **Stats** — tokens/sec, generated and prompt tokens and how much of the context window is in use after each reply (`/stats` toggles), and `/info`
 - **Model options** — `/set` for `temperature`, `top_p`, `min_p`, `repeat_penalty`, `seed` and `n_predict`: shows the server's own values (read live from `/props`) beside this session's overrides, which are session-only
 - **Input** — readline history (`~/.local/share/chat/history`), tab-completion of commands and conversation names, `"""` multiline input, Shift+Enter or Alt+Enter for a newline, bracketed paste
 - **Plain-text export** — `conv2txt.py` converts a saved conversation to text (thinking omitted unless `--keep-thinking`)

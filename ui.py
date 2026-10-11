@@ -531,21 +531,28 @@ def display_prompt_size(needed, n_ctx):
     )
 
 
-def display_stats(stats):
+def display_stats(stats, n_ctx=None):
     """Display token generation stats in a dim line.
 
-    "generated" is everything the model produced, thinking and answer alike; the prompt
-    figure is the server's count for this request. See docs/statistics.md.
+    "generated" is everything the model produced, thinking and answer alike; "prompt tok" is
+    the server's count for this request; "ctx" is what the context window holds now, prompt
+    and reply together (with n_ctx, out of it and as a share of it). It is not the size of
+    the next prompt, which leaves the thinking out. See docs/statistics.md.
     """
     if not stats:
         return
     parts = []
     if "completion_tokens" in stats:
-        parts.append(f"{stats['completion_tokens']} generated (thinking + answer)")
+        parts.append(f"{stats['completion_tokens']:,} generated")
     if "tokens_per_second" in stats:
         parts.append(f"{stats['tokens_per_second']:.1f} tok/s")
     if "prompt_tokens" in stats:
-        parts.append(f"{stats['prompt_tokens']} prompt tokens")
+        parts.append(f"{stats['prompt_tokens']:,} prompt tok")
+    if "context_tokens" in stats:
+        used = f"ctx: {stats['context_tokens']:,}"
+        if n_ctx:
+            used += f" / {n_ctx:,} ({stats['context_tokens'] / n_ctx * 100:.1f}%)"
+        parts.append(used)
     if parts:
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 

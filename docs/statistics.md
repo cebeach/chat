@@ -11,8 +11,8 @@ Two token figures appear, and they are different things:
   far, the new message and the chat template's own markup. The model's reasoning is kept
   apart from a reply and is **not** sent back, so it is not part of this figure.
 - **Generated tokens** are what the model produced for one reply, thinking and answer
-  together. They use the window while the reply is being written, but they are shown only
-  on the stats line and are never added to the prompt figure.
+  together. They use the window while the reply is being written. They are shown on the
+  stats line, counted in its `ctx` figure, and never added to the prompt figure.
 
 ## The pre-send check
 Before each message is sent, the app asks the server to render the exact prompt and count
@@ -132,14 +132,24 @@ or two, which is why that row is marked as an approximation.
 A dim line is printed under the reply, for example:
 
 ```
-  212 generated (thinking + answer) | 38.4 tok/s | 1530 prompt tokens
+  212 generated | 38.4 tok/s | 1,530 prompt tok | ctx: 1,741 / 8,192 (21.3%)
 ```
 
 | Part | Meaning |
 |---|---|
-| `212 generated (thinking + answer)` | tokens the model generated for this reply, reasoning included |
+| `212 generated` | tokens the model generated for this reply, reasoning included |
 | `38.4 tok/s` | generation speed (shown when the server reports it) |
-| `1530 prompt tokens` | tokens in the request you sent (the whole conversation, as the server counted it) |
+| `1,530 prompt tok` | tokens in the request you sent (the whole conversation, as the server counted it) |
+| `ctx: 1,741 / 8,192 (21.3%)` | what the context window holds now that the reply is done: the prompt and everything generated, thinking included, as the server reports it, out of the window size the server reports and as a share of it. Without a window size only `ctx: 1,741` is shown |
+
+`ctx` is the window's contents at the end of the turn. It is not the size of your
+next prompt: the reasoning is not sent back, so the next prompt is smaller by the thinking
+(`/info` gives the size of the stored conversation). It also is not what the 80% warning
+above measures, which is the prompt about to be sent, so the figure here can pass 80% with
+no warning. A reply cut off because the window filled shows a figure at the window. The
+count is the server's `tokens_cached`, which is one less than prompt plus generated because
+the last token the model produces is never fed back; with `llama-server --context-shift`
+it can be lower still. In [`/duel`](duel.md) the count is shown without the share.
 
 `/stats` turns this line off and on. It starts on. No line is shown for a reply you
 interrupted with Ctrl-C.

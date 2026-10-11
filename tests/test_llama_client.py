@@ -70,6 +70,23 @@ class TestStream:
             "tokens_per_second": 40.0,
         }
 
+    @pytest.mark.parametrize(
+        "cached, expected",
+        [(2330, 2330), (1900, 1900), (None, 2330)],
+        ids=[
+            "equals the sum",
+            "context shifted: the server's count wins",
+            "not reported: prompt + completion",
+        ],
+    )
+    def test_context_tokens_are_what_the_server_says_the_slot_holds(self, cached, expected):
+        final = {"content": "", "stop": True, "tokens_predicted": 800, "tokens_evaluated": 1530}
+        if cached is not None:
+            final["tokens_cached"] = cached
+        stream = LlamaChatStream(FakeResponse(lines=[sse(**final)]))
+        list(stream)
+        assert stream.stats["context_tokens"] == expected
+
     def test_no_final_chunk_leaves_stats_empty(self):
         stream = LlamaChatStream(FakeResponse(lines=[sse(content="x", stop=False)]))
         assert list(stream) == ["x"]
