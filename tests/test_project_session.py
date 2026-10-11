@@ -156,6 +156,37 @@ class TestUnknownProjectKeys:
         assert session.warnings == []
 
 
+class TestWrongProjectValues:
+    """A wrong-typed value in project.toml is reported and dropped; the project still opens."""
+
+    BAD = 'context_check = "yes"\n'
+    LINE = "project.toml: context_check must be true or false; ignored."
+
+    def test_startup_opens_the_project_and_reports_it(self, tmp_path):
+        make_project(tmp_path, toml=self.BAD)
+        session = session_in(tmp_path, (None,), argv=("--project", "novel"))
+        assert session.warnings == [self.LINE]
+        assert session.errors == []
+
+    def test_use_reports_it_once(self, tmp_path):
+        make_project(tmp_path, toml=self.BAD)
+        session = session_in(tmp_path, ("/project use novel", None))
+        assert session.warnings == [self.LINE]
+        assert session.errors == []
+
+    def test_reload_reports_it_again_until_it_is_fixed(self, tmp_path):
+        path = make_project(tmp_path, toml=self.BAD)
+
+        def inputs():
+            yield "/project reload"
+            (path / "project.toml").write_text("context_check = false\n")
+            yield "/project reload"
+            yield None
+
+        session = session_in(tmp_path, inputs(), argv=("--project", "novel"))
+        assert session.warnings == [self.LINE, self.LINE]
+
+
 class TestSwitching:
     def test_use_saves_the_old_conversation_then_the_new_one_in_the_project(self, tmp_path):
         path = make_project(tmp_path)

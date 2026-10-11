@@ -209,6 +209,12 @@ def initial(**config):
 
 
 class TestInitialOptions:
+    def test_a_wrong_value_is_reported_once(self):
+        options, out = initial(temperature="hot")
+        assert options == {}
+        assert out.count("config.toml: temperature") == 1
+        assert "ignored" in out
+
     def test_unset_keys_are_absent(self):
         assert initial() == ({}, "")
 
