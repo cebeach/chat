@@ -60,7 +60,7 @@ app from. Otherwise the text itself becomes the prompt. Start the app from the r
 directory, or use a path below it.
 
 ## "Unknown command"
-Check the name with `/?`. `/help` is shown in that table but is not implemented.
+Check the name with `/help` (or `/?`).
 
 ## Shift+Enter submits instead of adding a line
 Not every terminal can send Shift+Enter distinctly. Try Alt+Enter, or use `"""`

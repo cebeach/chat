@@ -4,12 +4,11 @@ Type a line starting with `/` to run a command. Commands are case-insensitive
 (`/Save` works), are never sent to the model, and are tab-completed (see
 [Input](input.md)). Anything else you type is sent to the model as a message.
 
-`/?` prints the in-app command table. The table also lists `/help`, but `/help` is
-not implemented and answers `Unknown command`; use `/?`.
+`/help` (or `/?`) prints the in-app command table.
 
 | Command | What it does |
 |---|---|
-| `/?` | Show the command table |
+| `/help` (alias `/?`) | Show the command table |
 | [`/cat <name>`](#cat-name) | Print a saved conversation |
 | [`/clear`](#clear) | Empty the current conversation |
 | [`/config`](#config) | Show settings; toggle `save_thinking` and `context_check` |
@@ -29,8 +28,8 @@ not implemented and answers `Unknown command`; use `/?`.
 | [`/system [text]`](#system) | View or set the system prompt |
 | `"""` | Start multiline input (see [Input](input.md)) |
 
-## /?
-Prints the command table.
+## /help
+Prints the command table. `/?` does the same.
 
 ## /cat <name>
 Prints the saved conversation `<name>` (see [`/conversations`](#conversations))

@@ -41,9 +41,10 @@ Tests marked `integration` start a real llama-server (profiles in `tests/llama-s
 
 ## Architecture
 
-Air-gapped terminal chat app talking to a local llama.cpp server. Ten source files, no package structure:
+Air-gapped terminal chat app talking to a local llama.cpp server. Eleven source files, no package structure:
 
 - **`chat.py`** — Entry point. Parses args, runs the REPL loop, dispatches slash commands via `handle_command()`.
+- **`commands.py`** — The slash-command table: a frozen `Command` per command (name, aliases, help rows, `handler_name` string, completion data). Stdlib, imports neither `chat` nor `ui`. `ui.py` derives `COMMANDS`, `print_help` and tab-completion from it; `chat.handle_command` looks `globals()[handler_name]` up on each call (a handler returning `False` stops the REPL) and `commands.check_handlers(globals())` runs at the end of `chat.py`. Adding a command: a table entry plus a `_handle_<name>(args, client, conversation, state)` in `chat.py`.
 - **`config.py`** — Loads `~/.config/chat/config.toml` (stdlib `tomllib`), merges with `DEFAULTS` dict.
 - **`llama_client.py`** — `LlamaClient` wraps the llama-server native API (`/health`, `/props`, `/apply-template`, `/tokenize`, `/completion`). The model and its context length are read from `/props` before every turn (`refresh()`), never chosen by the client. `LlamaChatStream` is an iterable that yields tokens (SSE) and exposes `.stats` after iteration. Thinking tags are detected from the server per model (`find_think_tags()`, `LlamaClient.detect_think_tags()`); read `docs/thinking-tags.md` before changing that.
 - **`conversation.py`** — `Conversation` holds message history with timestamps. Handles save/load to JSON files in `~/.local/share/chat/conversations/`, pair recall, and system prompt.
