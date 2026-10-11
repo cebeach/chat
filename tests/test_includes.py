@@ -9,9 +9,10 @@ import chat
 import includes
 import conv2txt
 import ui
-from chat import State, _prepare_user_message, build_message, expand_includes, handle_command
+from chat import State, _prepare_user_message, handle_command
 from config import DEFAULTS
 from conversation import Conversation
+from includes import build_message, expand_includes
 from tests.helpers import render
 
 FILES = {
