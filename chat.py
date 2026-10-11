@@ -1696,208 +1696,232 @@ def _run_duel(cmd, client, conversation, state):
     display_info("Added to the conversation.")
 
 
+def _handle_help(args, client, conversation, state):
+    print_help()
+    return True
+
+
+def _handle_exit(args, client, conversation, state):
+    _auto_save(conversation, state)
+    display_info("Goodbye!")
+    return False
+
+
+def _handle_clear(args, client, conversation, state):
+    conversation.clear()
+    display_info("Conversation cleared.")
+    return True
+
+
+def _handle_system(args, client, conversation, state):
+    if not args:
+        current = conversation.system_prompt or "(none)"
+        display_info(f"Current system prompt: {current}")
+    elif args.strip() == '"""':
+        text = get_multiline_input()
+        if text is not None and _system_prompt_fits(text, client, conversation, state):
+            conversation.system_prompt = text
+            display_info("System prompt set.")
+    else:
+        # A path inside the working directory is read as a file; anything else is the prompt text.
+        resolved_path = Path(args).expanduser().resolve()
+        in_cwd = resolved_path.is_relative_to(Path.cwd())
+        if in_cwd and resolved_path.is_file():
+            ok, result = _read_file(str(resolved_path))
+            if not ok:
+                display_error(result)
+            elif _system_prompt_fits(result, client, conversation, state):
+                conversation.system_prompt = result
+                conversation.source_file = str(resolved_path)
+                display_info("System prompt set from file.")
+        elif _system_prompt_fits(args, client, conversation, state):
+            # Treat as plain string prompt
+            conversation.system_prompt = args
+            conversation.source_file = None
+            display_info("System prompt set.")
+    return True
+
+
+def _handle_save(args, client, conversation, state):
+    name = args.strip() or None
+    try:
+        conv_dir = _conversations_dir(state)
+        filepath = conversation.save(
+            conv_dir,
+            name=name,
+            model=state.model,
+            omit_thinking=_omit_thinking(state),
+        )
+        display_info(f"Conversation saved: {filepath}")
+    except OSError as e:
+        display_error(f"Failed to save: {e}")
+    return True
+
+
+def _load_named(cmd, args, state, failure, use):
+    """Load the saved conversation named by `args` and hand it to use(name, conversation, model).
+
+    `use` runs inside the same try as the load, so its failures are reported as `failure`.
+    """
+    name = args.strip()
+    if not name:
+        display_error(f"Usage: {cmd} <name>")
+        return
+    try:
+        loaded_conv, loaded_model = Conversation.load(_conversations_dir(state), name)
+        use(name, loaded_conv, loaded_model)
+    except FileNotFoundError:
+        display_error(f"No saved conversation named '{name}'.")
+    except Exception as e:
+        display_error(f"{failure}: {e}")
+
+
+def _handle_load(args, client, conversation, state):
+    def apply(name, loaded_conv, loaded_model):
+        # Apply the whole saved conversation against the model being served
+        # now. The model names recorded in the file are information only:
+        # they never select a model and are never sent to the server.
+        conversation.messages = loaded_conv.messages
+        if state.project:
+            # The project's prompt wins over the one saved in the file.
+            conversation.system_prompt = state.project_prompt
+            conversation.source_file = state.project_source_file
+        else:
+            conversation.system_prompt = loaded_conv.system_prompt
+            # Where that system prompt came from (None clears a stale value).
+            conversation.source_file = loaded_conv.source_file
+        saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
+        display_info(f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})")
+
+    _load_named("/load", args, state, "Failed to load", apply)
+    return True
+
+
+def _handle_cat(args, client, conversation, state):
+    _load_named("/cat", args, state, "Failed to read conversation", display_cat_conversation)
+    return True
+
+
+def _handle_recall(args, client, conversation, state):
+    arg = args.strip()
+    if not arg:
+        display_error("Usage: /recall <pair_number>")
+        return True
+    try:
+        pair_index = int(arg)
+    except ValueError:
+        display_error("Pair number must be an integer.")
+        return True
+    try:
+        conversation.recall(pair_index)
+        display_info(f"Recalled pair {pair_index} into context.")
+    except IndexError as e:
+        display_error(str(e))
+    return True
+
+
+def _handle_conversations(args, client, conversation, state):
+    conv_dir = _conversations_dir(state)
+    conversations = Conversation.list_saved(conv_dir)
+    display_conversations(conversations)
+    return True
+
+
+def _handle_stats(args, client, conversation, state):
+    state.show_stats = not state.show_stats
+    status = "on" if state.show_stats else "off"
+    display_info(f"Stats display: {status}")
+    return True
+
+
+def _handle_retry(args, client, conversation, state):
+    if len(conversation.messages) < 2:
+        display_error("Nothing to retry (need at least one exchange).")
+    elif conversation.messages[-1]["role"] != "assistant":
+        display_error("Last message is not an assistant response.")
+    else:
+        conversation.messages.pop()  # remove assistant
+        state.retry_text = conversation.messages[-1]["content"]
+        # The text is already flat; carry the files it came from, do not re-expand.
+        state.pending_includes = conversation.messages[-1].get("includes", [])
+        conversation.messages.pop()  # remove user (REPL will re-add)
+    return True
+
+
+def _handle_read(args, client, conversation, state):
+    if not args:
+        display_error("Usage: /read <path> [<path> ...]")
+        return True
+    # Support multiple filenames; quote paths containing spaces
+    try:
+        filenames = shlex.split(args)
+    except ValueError as e:
+        display_error(f"Could not parse paths: {e}")
+        return True
+    # Same splice rule and failure behaviour as @@<path>: any problem file aborts.
+    segments = [("file", name, name) for name in filenames]
+    combined, includes, errors = build_message(segments)
+    if errors:
+        for error in errors:
+            display_error(escape(error))
+        return True
+    state.retry_text = combined
+    state.pending_includes = includes
+    console.print("User:")
+    console.print(combined)
+    display_included_files(includes)
+    return True
+
+
+def _handle_info(args, client, conversation, state):
+    try:
+        counts = tokens.breakdown(client, conversation, model=state.model)
+    except (RequestException, ValueError, KeyError):
+        counts = None  # the server could not be asked; the rest of the table still shows
+    display_conversation_info(conversation.summary(), counts, state.context_length, vram=_vram_row(state))
+    if counts and counts.get("notes") and tokens.notes_heavy(counts["notes"], counts["n_ctx"]):
+        display_notes_heavy(counts["notes"], counts["n_ctx"])
+    return True
+
+
 def handle_command(cmd, args, client, conversation, state):
     """Handle a slash command. Returns True if the REPL should continue."""
     if cmd == "/?":
-        print_help()
-
+        return _handle_help(args, client, conversation, state)
     elif cmd == "/exit":
-        _auto_save(conversation, state)
-        display_info("Goodbye!")
-        return False
-
+        return _handle_exit(args, client, conversation, state)
     elif cmd == "/clear":
-        conversation.clear()
-        display_info("Conversation cleared.")
-
+        return _handle_clear(args, client, conversation, state)
     elif cmd == "/system":
-        if not args:
-            current = conversation.system_prompt or "(none)"
-            display_info(f"Current system prompt: {current}")
-        elif args.strip() == '"""':
-            text = get_multiline_input()
-            if text is not None and _system_prompt_fits(text, client, conversation, state):
-                conversation.system_prompt = text
-                display_info("System prompt set.")
-        else:
-            # Attempt to interpret args as a file path
-            # Resolve path relative to cwd, expand user
-            resolved_path = Path(args).expanduser().resolve()
-            cwd = Path.cwd()
-            try:
-                # Python 3.9+ has is_relative_to
-                if resolved_path.is_relative_to(cwd):
-                    in_cwd = True
-                else:
-                    in_cwd = False
-            except AttributeError:
-                # For older Python, compare commonpath
-                in_cwd = (
-                    resolved_path.is_relative_to(cwd) if hasattr(resolved_path, "is_relative_to") else False
-                )
-            # Fallback for older versions
-            if not in_cwd:
-                # Check if resolved_path is under cwd by walking parents
-                try:
-                    in_cwd = cwd in resolved_path.parents or resolved_path == cwd
-                except Exception:
-                    in_cwd = False
-            if in_cwd and resolved_path.is_file():
-                ok, result = _read_file(str(resolved_path))
-                if not ok:
-                    display_error(result)
-                elif _system_prompt_fits(result, client, conversation, state):
-                    conversation.system_prompt = result
-                    conversation.source_file = str(resolved_path)
-                    display_info("System prompt set from file.")
-            elif _system_prompt_fits(args, client, conversation, state):
-                # Treat as plain string prompt
-                conversation.system_prompt = args
-                conversation.source_file = None
-                display_info("System prompt set.")
-
+        return _handle_system(args, client, conversation, state)
     elif cmd == "/save":
-        name = args.strip() or None
-        try:
-            conv_dir = _conversations_dir(state)
-            filepath = conversation.save(
-                conv_dir,
-                name=name,
-                model=state.model,
-                omit_thinking=_omit_thinking(state),
-            )
-            display_info(f"Conversation saved: {filepath}")
-        except OSError as e:
-            display_error(f"Failed to save: {e}")
-
+        return _handle_save(args, client, conversation, state)
     elif cmd == "/load":
-        name = args.strip()
-        if not name:
-            display_error("Usage: /load <name>")
-        else:
-            try:
-                conv_dir = _conversations_dir(state)
-                loaded_conv, loaded_model = Conversation.load(conv_dir, name)
-                # Apply the whole saved conversation against the model being served
-                # now. The model names recorded in the file are information only:
-                # they never select a model and are never sent to the server.
-                conversation.messages = loaded_conv.messages
-                if state.project:
-                    # The project's prompt wins over the one saved in the file.
-                    conversation.system_prompt = state.project_prompt
-                    conversation.source_file = state.project_source_file
-                else:
-                    conversation.system_prompt = loaded_conv.system_prompt
-                    # Where that system prompt came from (None clears a stale value).
-                    conversation.source_file = loaded_conv.source_file
-                saved_with = f", saved with model: {escape(loaded_model)}" if loaded_model else ""
-                display_info(
-                    f"Loaded conversation: {name} ({len(conversation.messages)} messages{saved_with})"
-                )
-            except FileNotFoundError:
-                display_error(f"No saved conversation named '{name}'.")
-            except Exception as e:
-                display_error(f"Failed to load: {e}")
-
+        return _handle_load(args, client, conversation, state)
     elif cmd == "/cat":
-        name = args.strip()
-        if not name:
-            display_error("Usage: /cat <name>")
-        else:
-            try:
-                conv_dir = _conversations_dir(state)
-                loaded_conv, loaded_model = Conversation.load(conv_dir, name)
-                display_cat_conversation(name, loaded_conv, loaded_model)
-            except FileNotFoundError:
-                display_error(f"No saved conversation named '{name}'.")
-            except Exception as e:
-                display_error(f"Failed to read conversation: {e}")
-
+        return _handle_cat(args, client, conversation, state)
     elif cmd == "/recall":
-        arg = args.strip()
-        if not arg:
-            display_error("Usage: /recall <pair_number>")
-        else:
-            try:
-                pair_index = int(arg)
-            except ValueError:
-                display_error("Pair number must be an integer.")
-                return True
-            try:
-                conversation.recall(pair_index)
-                display_info(f"Recalled pair {pair_index} into context.")
-            except IndexError as e:
-                display_error(str(e))
-
+        return _handle_recall(args, client, conversation, state)
     elif cmd == "/conversations":
-        conv_dir = _conversations_dir(state)
-        conversations = Conversation.list_saved(conv_dir)
-        display_conversations(conversations)
-
+        return _handle_conversations(args, client, conversation, state)
     elif cmd == "/stats":
-        state.show_stats = not state.show_stats
-        status = "on" if state.show_stats else "off"
-        display_info(f"Stats display: {status}")
-
+        return _handle_stats(args, client, conversation, state)
     elif cmd == "/set":
         _handle_set(args, state, client)
-
     elif cmd == "/duel":
         _handle_duel(args, client, conversation, state)
-
     elif cmd == "/retry":
-        if len(conversation.messages) < 2:
-            display_error("Nothing to retry (need at least one exchange).")
-        elif conversation.messages[-1]["role"] != "assistant":
-            display_error("Last message is not an assistant response.")
-        else:
-            conversation.messages.pop()  # remove assistant
-            state.retry_text = conversation.messages[-1]["content"]
-            # The text is already flat; carry the files it came from, do not re-expand.
-            state.pending_includes = conversation.messages[-1].get("includes", [])
-            conversation.messages.pop()  # remove user (REPL will re-add)
-
+        return _handle_retry(args, client, conversation, state)
     elif cmd == "/read":
-        if not args:
-            display_error("Usage: /read <path> [<path> ...]")
-            return True
-        # Support multiple filenames; quote paths containing spaces
-        try:
-            filenames = shlex.split(args)
-        except ValueError as e:
-            display_error(f"Could not parse paths: {e}")
-            return True
-        # Same splice rule and failure behaviour as @@<path>: any problem file aborts.
-        segments = [("file", name, name) for name in filenames]
-        combined, includes, errors = build_message(segments)
-        if errors:
-            for error in errors:
-                display_error(escape(error))
-            return True
-        state.retry_text = combined
-        state.pending_includes = includes
-        console.print("User:")
-        console.print(combined)
-        display_included_files(includes)
-
+        return _handle_read(args, client, conversation, state)
     elif cmd == "/config":
         _handle_config(args, state, client)
-
     elif cmd == "/project":
         _handle_project(args, client, conversation, state)
-
     elif cmd == "/remember":
         _handle_remember(args, client, conversation, state)
-
     elif cmd == "/info":
-        try:
-            counts = tokens.breakdown(client, conversation, model=state.model)
-        except (RequestException, ValueError, KeyError):
-            counts = None  # the server could not be asked; the rest of the table still shows
-        display_conversation_info(conversation.summary(), counts, state.context_length, vram=_vram_row(state))
-        if counts and counts.get("notes") and tokens.notes_heavy(counts["notes"], counts["n_ctx"]):
-            display_notes_heavy(counts["notes"], counts["n_ctx"])
-
+        return _handle_info(args, client, conversation, state)
     else:
         display_error(f"Unknown command: {cmd}. Type /? for available commands.")
 
