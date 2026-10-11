@@ -204,8 +204,9 @@ word. The last object (`"stop": true`) carries the totals. AI Chat reads:
 | Field | Shown as |
 |---|---|
 | `model` | Which model wrote the reply (stored with it) |
-| `tokens_predicted` | "N generated (thinking + answer)" on the [stats line](statistics.md#after-each-reply) |
-| `tokens_evaluated` | "N prompt tokens": the whole prompt, cached part included |
+| `tokens_predicted` | "N generated" (thinking and answer together) on the [stats line](statistics.md#after-each-reply) |
+| `tokens_evaluated` | "N prompt tok": the whole prompt, cached part included |
+| `tokens_cached` | "ctx: N": the tokens the server's slot holds once the reply is done, thinking included (the prompt plus the reply, less the last generated token, which is never fed back). The sum of the two fields above is used if it is missing |
 | `timings.predicted_per_second` | "N tok/s" |
 
 The same last object also has `truncated`, which is true when the reply was stopped because

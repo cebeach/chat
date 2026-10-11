@@ -115,7 +115,7 @@ class TestNormalPhase:
     def test_stats_are_shown_when_on(self, capsys):
         env = Env(SlotScript({0: [Reply("A word")], 1: [Reply("B word")]}), show_stats=True)
         env.run(Phase.DRAFT, "a", "b")
-        assert capsys.readouterr().out.count("generated (thinking + answer)") == 2
+        assert capsys.readouterr().out.count("prompt tok") == 2
 
     def test_both_texts_are_displayed_under_their_labels(self, capsys):
         env = Env(SlotScript({0: [Reply("alpha text")], 1: [Reply("beta text")]}))

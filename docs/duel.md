@@ -142,6 +142,10 @@ Without `--kv-unified` use `split`; with `shared` such a server leaves each side
 quarter of the pool. Slots 2 and up are not counted. With `context_check` off nothing is
 refused, as for a normal message.
 
+The stats line under a side's turn shows how many tokens its slot holds (`ctx`) but not
+a share of the window: `/props` cannot say whether that window is the slot's own or the pool
+both sides share, so a percentage could mislead.
+
 ## Settings
 
 `config.toml` keys (all optional; `/duel set` changes them for the session, `default` resets):

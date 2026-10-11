@@ -101,6 +101,12 @@ class TestHappyPath:
         assert rec["judge"]["order"] == ["a", "b"] and rec["judge"]["recommendation"] == "a"
         assert [i["status"] for i in rec["ledger"]["issues"]] == ["addressed", "declined"]
 
+    def test_the_stats_line_shows_the_slots_tokens_but_no_share_of_the_window(self, tmp_path, capsys):
+        # The window /props reports may be a pool shared by both sides, so no percentage here.
+        duel_session(tmp_path)
+        out = " ".join(capsys.readouterr().out.split())
+        assert "ctx: 200" in out and "ctx: 200 /" not in out
+
     def test_the_record_is_outside_the_conversation_listing(self, tmp_path):
         duel_session(tmp_path)
         assert all(not name.startswith("duel-") for name, _ in Conversation.list_saved(tmp_path))

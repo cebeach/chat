@@ -13,10 +13,12 @@ import requests
 
 import chat
 import tokens
+import ui
 from chat import State
 from config import DEFAULTS
 from conversation import Conversation, split_think
 from tests import llama_server_config as cfg
+from tests.helpers import render
 
 WINDOW = 2048
 # Short, deterministic replies: at this window a thinking model could otherwise fill it mid-reply.
@@ -194,3 +196,47 @@ def test_a_reply_stopped_by_a_token_limit_is_not_flagged_truncated(llama_client)
     "".join(stream)
     assert stream.stats["completion_tokens"] == OPTIONS["n_predict"]
     assert stream.truncated is False
+
+
+def completion_counts(client, prompt_text, n_predict):
+    """The final message of a plain /completion: what the server says its slot holds afterwards."""
+    prompt = client._apply_template(user(prompt_text), model=client.server_model)
+    resp = requests.post(
+        f"{client.base_url}/completion",
+        json={"prompt": prompt, "n_predict": n_predict, "seed": 1, "temperature": 0},
+        timeout=300,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def held_by_the_slot(final):
+    """What a slot holds after a reply with no context shift: the prompt and every generated token
+    except the last one, which is sampled but never fed back to the model."""
+    return final["tokens_evaluated"] + final["tokens_predicted"] - 1
+
+
+def test_the_slot_holds_the_prompt_plus_everything_generated(llama_client):
+    final = completion_counts(llama_client, "Say hello.", 16)
+    assert final["tokens_cached"] == held_by_the_slot(final)
+
+
+def test_the_slot_holds_the_thinking_too(llama_server, llama_client):
+    profile = cfg.select_profile(cfg.load_config(), llama_server.profile)
+    if not profile.think_tags:
+        pytest.skip("this profile's model does not think")
+    final = completion_counts(llama_client, THINK_PROMPT, 1000)
+    assert final["tokens_cached"] == held_by_the_slot(final)
+    # The reply is mostly thinking, which the next prompt will leave out but the window holds now.
+    assert final["tokens_predicted"] > 1
+
+
+def test_the_stats_line_shows_the_window_the_server_runs_with(llama_client):
+    stream = llama_client.chat(llama_client.server_model, user("Say hello."), OPTIONS)
+    "".join(stream)
+    used = stream.stats["context_tokens"]
+    assert (
+        used < stream.stats["prompt_tokens"] + stream.stats["completion_tokens"]
+    )  # the last token is not cached
+    line = render(lambda: ui.display_stats(stream.stats, llama_client.server_n_ctx))
+    assert f"ctx: {used:,} / {WINDOW:,} ({used / WINDOW * 100:.1f}%)" in line
