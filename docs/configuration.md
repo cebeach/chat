@@ -19,6 +19,8 @@ current session only.
 | `system_prompt` | string | `""` | System prompt for new sessions. |
 | `conversations_dir` | string | `~/.local/share/chat/conversations` | Where `/save`, auto-save and `/load` look. |
 | `projects_dir` | string | `~/.local/share/chat/projects` | Where [projects](projects.md) live. |
+| `server_log_dir` | string | `""` | Directory of llama-server logs, to show the VRAM it used at load in `/info`. `~` and `$VAR` are expanded. Empty: off. See [server log](server-log.md). |
+| `server_log` | string | `""` | One log file instead of a directory (skips the listing; the file is still checked against the server). |
 | `auto_save` | bool | `true` | Save after each reply and on exit. |
 | `save_thinking` | bool | `true` | Keep the model's reasoning (the `thinking` field) in saved files. |
 | `think_start`, `think_end` | string | `""` | Override the detected thinking tags. Both must be set. |
@@ -63,6 +65,7 @@ reserve_output_tokens = 1000
 python chat.py                          # use config.toml or defaults
 python chat.py --url http://host:8001   # another llama-server
 python chat.py --project novel          # start in a project
+python chat.py --server-log-dir ~/logs  # where llama-server logs are (see server-log.md)
 ```
 
 ## Files the app uses

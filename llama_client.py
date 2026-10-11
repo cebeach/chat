@@ -207,6 +207,10 @@ class LlamaClient:
             pass
         self._detect_think_tags(props)
 
+    def props(self):
+        """GET /props as a dict, or None when it cannot be read. Never raises."""
+        return self._get_props()
+
     def _get_props(self):
         """GET /props as a dict, or None when it cannot be read. Never raises."""
         try:

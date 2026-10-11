@@ -1,0 +1,45 @@
+0.00.180.356 I srv    load_model: loading model '/models/gemma-4-12B-it-uncensored-Q8_0.gguf'
+0.00.180.357 I srv    load_model: local path '/models/gemma-4-12B-it-uncensored-Q8_0.gguf'
+0.00.180.366 I cmn  common_init_: fitting params to device memory ...
+0.00.180.366 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)
+0.00.180.396 I common_params_fit_impl: getting device memory data for initial parameters:
+0.00.239.853 I llama_model_loader: loaded meta data with 52 key-value pairs and 667 tensors from /models/gemma-4-12B-it-uncensored-Q8_0.gguf (version GGUF V3 (latest))
+0.00.239.853 I llama_model_loader: loaded meta data with 52 key-value pairs and 667 tensors from /models/gemma-4-12B-it-uncensored-Q8_0.gguf (version GGUF V3 (latest))
+0.00.651.872 I load_tensors:        CUDA0 model buffer size =     0.00 MiB
+0.00.651.873 I load_tensors:    CUDA_Host model buffer size =     0.00 MiB
+0.00.654.961 I llama_context:  CUDA_Host  output buffer size =     2.00 MiB
+0.00.659.855 I llama_kv_cache:      CUDA0 KV buffer size =     0.00 MiB
+0.00.660.068 I llama_kv_cache:      CUDA0 KV buffer size =     0.00 MiB
+0.00.669.495 I sched_reserve:      CUDA0 compute buffer size =  2149.32 MiB
+0.00.669.496 I sched_reserve:  CUDA_Host compute buffer size =  1061.32 MiB
+0.00.802.500 I llama_model_loader: loaded meta data with 52 key-value pairs and 667 tensors from /models/gemma-4-12B-it-uncensored-Q8_0.gguf (version GGUF V3 (latest))
+0.01.515.820 I load_tensors:   CPU_Mapped model buffer size =  1020.00 MiB
+0.01.515.820 I load_tensors:        CUDA0 model buffer size = 12067.72 MiB
+0.04.188.845 I llama_context:  CUDA_Host  output buffer size =     2.00 MiB
+0.04.193.449 I llama_kv_cache:      CUDA0 KV buffer size =  4352.00 MiB
+0.04.199.109 I llama_kv_cache:      CUDA0 KV buffer size =   510.00 MiB
+0.04.389.248 I sched_reserve:      CUDA0 compute buffer size =  2149.32 MiB
+0.04.389.249 I sched_reserve:  CUDA_Host compute buffer size =  1061.32 MiB
+0.04.389.363 D set_adapters_lora: adapters = (nil)
+0.04.389.364 D adapters_lora_are_same: adapters = (nil)
+0.04.389.364 I cmn  common_init_: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+0.04.441.564 W srv    load_model: the slot context (524288) exceeds the training context of the model (262144) - capping
+0.04.450.199 D CUDA Graph id 39 reused
+0.04.450.200 D ggml_backend_cuda_graph_compute: CUDA graph warmup complete
+0.04.479.891 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 262144, kv_unified = 'true'
+0.04.479.914 I spec common_specu: no implementations specified for speculative decoding
+0.04.479.916 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 262144
+0.04.479.917 D slot        reset: id  0 | task -1 | 
+0.04.479.923 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 262144
+0.04.479.923 D slot        reset: id  1 | task -1 | 
+0.04.479.938 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+0.04.479.939 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.04.479.939 I srv    load_model: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+0.04.479.939 I srv    load_model: context checkpoints enabled, max = 32, min spacing = 8192
+0.04.479.953 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task
+0.04.479.967 D srv          init: __TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__
+0.04.486.266 I srv          init: init: chat template, example_format: '<|turn>system
+0.04.486.858 I srv          init: init: chat template, thinking = 1
+0.04.486.877 I srv          init: preserve_reasoning kwarg: not supported by template
+0.04.486.909 I srv  llama_server: model loaded
+0.04.486.913 I srv  llama_server: listening on http://127.0.0.1:8001
