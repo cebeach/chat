@@ -817,6 +817,7 @@ class DuelHost:
     echo_suppressed: object
     get_multiline_input: object
     console: object
+    option_keys: object  # the /set option names and types (a value, not a forwarder)
 
 
 class _ConsoleRef:
@@ -852,7 +853,11 @@ _HOST_NAMES = {
 
 
 def _duel_host():
-    return DuelHost(**{member: _forward(name) for member, name in _HOST_NAMES.items()}, console=_ConsoleRef())
+    return DuelHost(
+        **{member: _forward(name) for member, name in _HOST_NAMES.items()},
+        console=_ConsoleRef(),
+        option_keys=_OPTION_KEYS,
+    )
 
 
 @dataclass

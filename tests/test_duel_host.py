@@ -29,7 +29,7 @@ MEMBERS = {
 
 
 def test_the_host_has_exactly_the_expected_members():
-    assert {f.name for f in fields(chat.DuelHost)} == set(MEMBERS) | {"console"}
+    assert {f.name for f in fields(chat.DuelHost)} == set(MEMBERS) | {"console", "option_keys"}
 
 
 @pytest.mark.parametrize("member", sorted(MEMBERS))
@@ -49,3 +49,7 @@ def test_the_console_is_the_current_chat_console():
     with mock.patch.object(chat, "console", replacement):
         host.console.print("y")
     replacement.print.assert_called_once_with("y")
+
+
+def test_option_keys_is_the_chat_table():
+    assert chat._duel_host().option_keys is chat._OPTION_KEYS
