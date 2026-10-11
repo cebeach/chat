@@ -38,6 +38,10 @@ Defined in `tests/conftest.py`.
 | `llama_server` | session, one per profile | A llama-server for the profile the test is running against. An object with `.url` (`http://127.0.0.1:8001`), `.port`, `.argv` (the full command line), `.profile` (the profile name), `.extra_args` (the flags from a `llama_args` marker, else `()`) and `.log_dir` |
 | `llama_client` | function | A new `LlamaClient` pointed at that server, already refreshed from `/props` |
 
+`llama_server.log_dir` holds `llama-server.log` (stdout and stderr in one file, as
+`2>&1 | tee` writes it); `tests/test_server_log_integration.py` parses it with `server_log.py`
+to catch log-format drift. `tests/server_log_gemma.txt` is a scrubbed excerpt of a real log.
+
 A test marks itself `integration` and asks for the fixture it needs:
 
 ```python

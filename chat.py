@@ -4,6 +4,7 @@
 import argparse
 import copy
 import math
+import os
 from pathlib import Path
 import queue
 import random
@@ -19,6 +20,7 @@ from rich.markup import escape
 
 import duel
 import projects
+import server_log
 from config import apply_project, load_config
 from conversation import Conversation, split_think
 from duel import Phase
@@ -81,6 +83,11 @@ class State:
     # The session copy of the /duel settings (see _initial_duel) and the last duel's record.
     duel: dict = field(default_factory=lambda: _initial_duel({}, quiet=True))
     duel_last: dict | None = None
+    # Device memory read from the server log once at startup (see load_vram), the log's
+    # name, and whether it was dropped because the model changed. /info reads these only.
+    vram: dict | None = None
+    vram_log: str = ""
+    vram_stale: bool = False
 
 
 def parse_args():
@@ -94,6 +101,11 @@ def parse_args():
         "--project",
         default=None,
         help="Start in this project (see /project)",
+    )
+    parser.add_argument(
+        "--server-log-dir",
+        default=None,
+        help="Directory of llama-server logs, to show load-time VRAM in /info",
     )
     return parser.parse_args()
 
@@ -492,6 +504,34 @@ def _store_reply(conversation, response, chat_stream, state):
     conversation.add_assistant(answer, model=_reply_model(chat_stream, state), thinking=thinking)
 
 
+def load_vram(state, client, log_dir, log_file):
+    """Fill state.vram from the server log, once. Never touches the log again.
+
+    Does nothing unless a log directory or file is configured and the server is local.
+    """
+    if not (log_dir or log_file):
+        return
+    found = server_log.find_log(log_dir, log_file, client.props(), client.base_url)
+    if found:
+        state.vram_log = os.path.basename(found[0])
+        state.vram = found[1]
+
+
+def _vram_row(state):
+    """The /info text for the load-time VRAM, or None for no row."""
+    if state.vram_stale:
+        return "not available (model changed since startup)"
+    vram = state.vram
+    if not vram:
+        return None
+    if vram.get("multi_gpu"):
+        return "multi-GPU not supported"
+    return (
+        f"{vram['device']} model {vram['model'] / 1024:.1f} GiB, KV {vram['kv'] / 1024:.1f}, "
+        f"compute {vram['compute'] / 1024:.1f} (log: {state.vram_log}, may belong to an earlier run)"
+    )
+
+
 def _sync_server_info(state, model, n_ctx, announce=True):
     """Make state.model and state.context_length follow what the server reports.
 
@@ -504,6 +544,8 @@ def _sync_server_info(state, model, n_ctx, announce=True):
         state.context_length = n_ctx
     if model and model != old:
         state.model = model
+        if state.vram is not None:
+            state.vram, state.vram_stale = None, True  # the figure described the old model
         if announce:
             ctx = f" (context {state.context_length:,} tokens)" if state.context_length else ""
             display_info(f"model: {escape(old)} → {escape(model)}{ctx}")
@@ -1848,7 +1890,7 @@ def handle_command(cmd, args, client, conversation, state):
             counts = tokens.breakdown(client, conversation, model=state.model)
         except (RequestException, ValueError, KeyError):
             counts = None  # the server could not be asked; the rest of the table still shows
-        display_conversation_info(conversation.summary(), counts, state.context_length)
+        display_conversation_info(conversation.summary(), counts, state.context_length, vram=_vram_row(state))
         if counts and counts.get("notes") and tokens.notes_heavy(counts["notes"], counts["n_ctx"]):
             display_notes_heavy(counts["notes"], counts["n_ctx"])
 
@@ -1907,6 +1949,12 @@ def main():
         duel=_initial_duel(config),
         auto_save_name="auto_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
         global_config=dict(config),
+    )
+    load_vram(
+        state,
+        client,
+        args.server_log_dir or config["server_log_dir"],
+        config["server_log"],
     )
     # Startup value for /config; no announcement (the /config row covers it).
     _update_think_tags(state, client.think_tags, announce=False)

@@ -336,7 +336,7 @@ def display_notes_heavy(notes_tokens, n_ctx):
     )
 
 
-def display_conversation_info(summary, counts=None, context_length=None):
+def display_conversation_info(summary, counts=None, context_length=None, vram=None):
     """The /info table. `counts` is tokens.breakdown()'s dict (None: not available)."""
     table = Table(title="Conversation Info", show_header=True, header_style="bold")
     table.add_column("Statistic", style="bold cyan")
@@ -362,6 +362,8 @@ def display_conversation_info(summary, counts=None, context_length=None):
     table.add_row("Context window", f"{context_length:,} tokens" if context_length else "unknown")
     if counts and context_length:
         table.add_row("Window used", f"{counts['total'] / context_length * 100:.1f}%")
+    if vram:
+        table.add_row("VRAM (at load)", vram)
     console.print(table)
 
 

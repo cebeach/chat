@@ -41,7 +41,7 @@ Tests marked `integration` start a real llama-server (profiles in `tests/llama-s
 
 ## Architecture
 
-Air-gapped terminal chat app talking to a local llama.cpp server. Nine source files, no package structure:
+Air-gapped terminal chat app talking to a local llama.cpp server. Ten source files, no package structure:
 
 - **`chat.py`** — Entry point. Parses args, runs the REPL loop, dispatches slash commands via `handle_command()`.
 - **`config.py`** — Loads `~/.config/chat/config.toml` (stdlib `tomllib`), merges with `DEFAULTS` dict.
@@ -51,6 +51,7 @@ Air-gapped terminal chat app talking to a local llama.cpp server. Nine source fi
 - **`tokens.py`** — Token accounting against the context window: `fits`, `near_limit`, the `/info` `breakdown`. Pure logic over `LlamaClient.count_tokens` / `prompt_tokens` / `check_fit` (`/tokenize` and `/apply-template`); `chat.py` runs the check before every send and `/system`.
 - **`projects.py`** — Named projects (`docs/projects.md`): a directory with `project.md` (notes), `system.md` (system prompt), `project.toml` (allowed overrides) and `conversations/`. Stdlib, file I/O and pure logic only: name checks, atomic `write_notes`, `diff_text`, the `/remember` prompt and `clean_reply`. `chat.py` holds the switching (`_switch_project`, `_reload_project`, `_sync_notes`) and `/remember`; `Conversation.project_notes` rides in the system message and is never saved.
 - **`duel.py`** — `/duel` (`docs/duel.md`): stdlib, pure logic like `projects.py`. The fixed phase sequence and who takes part in each phase, the issue `Ledger` (its transition table is the only way a status changes), prompt builders, lenient parsers, side options, the `/duel` argument parser and the atomic record file. `chat.py` runs it: `_run_phase` (threads only exist inside it, one per participant, handing results to the main thread through queues; a phase that ends abnormally is discarded whole) and `_handle_duel`. Sides are built with `duel.new_conversation`, never `chat.Conversation`.
+- **`server_log.py`** — Load-time VRAM for `/info` (`docs/server-log.md`): stdlib, file I/O and pure logic like `projects.py`. `last_startup_block` (streams a log, keeps the lines between `listening on` markers), `matches` (strict fingerprint against `/props`), `vram_summary`, `find_log`. The server logs no request, so the log is found by fingerprint, never by a marker. `chat.py:load_vram` runs it once at startup and `State.vram` holds the result; the log is never read again.
 - **`conv2txt.py`** — Standalone CLI utility to convert saved conversation JSON to plain text.
 
 ### Documentation

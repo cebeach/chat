@@ -66,7 +66,8 @@ Shows message count (you and AI), words, characters, the context window size and
 there is a message, the tokens the next prompt would carry, split into system prompt,
 project notes (when a project has any), your messages, the AI's replies and template overhead, with the share of the window.
 The counts come from the server each time, so `/info` needs it to be running. See
-[Statistics](statistics.md#info).
+[Statistics](statistics.md#info). With a [server log](server-log.md) configured it also
+shows the VRAM the model, KV cache and compute buffers used when the server loaded.
 
 ## /load <name>
 Replaces the current messages and system prompt with the saved conversation

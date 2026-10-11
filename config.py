@@ -19,6 +19,10 @@ DEFAULTS = {
     "conversations_dir": str(Path.home() / ".local" / "share" / "chat" / "conversations"),
     # Where named projects live (see docs/projects.md).
     "projects_dir": str(Path.home() / ".local" / "share" / "chat" / "projects"),
+    # Where llama-server's logs are, to show load-time VRAM in /info (see docs/server-log.md);
+    # empty: off. server_log names one log file instead of a directory.
+    "server_log_dir": "",
+    "server_log": "",
     "auto_save": True,
     "save_thinking": True,
     # Optional override of the detected thinking tags (both must be non-empty).
