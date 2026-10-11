@@ -5,6 +5,7 @@ CLI arguments override config file values.
 """
 
 import difflib
+import math
 from pathlib import Path
 
 import tomllib
@@ -81,8 +82,8 @@ def _is_count(value):
 
 
 # The keys whose value is checked here, by type; reserve_output_tokens also has to be >= 0.
-# The sampling options and the duel_* keys are not listed: chat._initial_options and
-# chat._initial_duel check and report those (they carry range rules), so no key is
+# The sampling options and the duel_* keys are not listed: option_overrides and
+# duel_settings below check and report those (they carry range rules), so no key is
 # checked in two places.
 VALUE_RULES = {
     "system_prompt": (_is_str, "must be a string"),
@@ -141,6 +142,120 @@ def load_config():
     reports the unknown keys and the wrong-typed values (which fall back too).
     """
     return load_config_checked()[0]
+
+
+# The sampling options a session can override: the type /set parses and what the server
+# accepts. The server clamps most out-of-range values silently and answers a few with
+# HTTP 400, so the app checks first and refuses what it would otherwise get wrong.
+OPTION_KEYS = {
+    "seed": int,
+    "temperature": float,
+    "top_p": float,
+    "min_p": float,
+    "repeat_penalty": float,
+    "n_predict": int,
+}
+OPTION_RULES = {
+    "seed": (lambda v: -1 <= v <= 0xFFFFFFFF, "an integer from -1 (random) to 4294967295"),
+    "temperature": (lambda v: v >= 0, "a number >= 0 (0 is greedy)"),
+    "top_p": (lambda v: 0 <= v <= 1, "a number from 0 to 1 (1 disables it)"),
+    "min_p": (lambda v: 0 <= v <= 1, "a number from 0 to 1 (0 disables it)"),
+    "repeat_penalty": (lambda v: v > 0, "a number > 0 (1 disables it)"),
+    "n_predict": (
+        lambda v: v >= 1,
+        "an integer >= 1 (`/set n_predict default` returns to the server's limit)",
+    ),
+}
+
+
+def validated(key, value):
+    """`value` as option `key`'s type, or ValueError saying what the option accepts.
+
+    A bool is refused (it is an int in Python), as is a float for an integer option
+    (TOML `n_predict = 5.5`); an int is fine for a float option (`temperature = 1`).
+    """
+    kind = OPTION_KEYS[key]
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not ok or (kind is int and not isinstance(value, int)) or not math.isfinite(value):
+        raise ValueError(f"must be {kind.__name__}")
+    value = kind(value)
+    accepts, description = OPTION_RULES[key]
+    if not accepts(value):
+        raise ValueError(f"must be {description}")
+    return value
+
+
+def option_overrides(config, source="config.toml"):
+    """(options, problems): the session's overrides from `config`, only the keys that are set
+    and valid, and one printable line per rejected key.
+
+    source names the file in a problem line.
+
+    State.options holds nothing else. /props reports the server's launch defaults but
+    never what a request sent, so the app must remember what it sends; every other
+    option is left out of the request and the server's own default applies.
+    """
+    options = {}
+    problems = []
+    for key in OPTION_KEYS:
+        if config.get(key) is None:
+            continue
+        try:
+            options[key] = validated(key, config[key])
+        except ValueError as exc:
+            problems.append(f"{source}: {key} {exc}; ignored.")
+    return options, problems
+
+
+def duel_settings(config, source="config.toml"):
+    """(settings, problems): the session's /duel settings from `config`; a bad value is reported
+    in `problems` (one printable line each) and falls back to its default.
+
+    Keys are the config names without the `duel_` prefix. `auto` has no config key: it
+    starts off in every session. A seed of -1 ("random") counts as unset.
+    """
+    settings = {"auto": False}
+    problems = []
+
+    def bad(key, why):
+        problems.append(f"{source}: duel_{key} {why}; ignored.")
+
+    axes = config.get("duel_axes", duel.DEFAULT_AXES)
+    if isinstance(axes, list) and axes and all(isinstance(a, str) and a.strip() for a in axes):
+        settings["axes"] = [a.strip() for a in axes]
+    else:
+        bad("axes", "must be a non-empty list of non-empty strings")
+        settings["axes"] = list(duel.DEFAULT_AXES)
+
+    for side, default in (("a", duel.DEFAULT_STANCE_A), ("b", duel.DEFAULT_STANCE_B)):
+        value = config.get(f"duel_stance_{side}", default)
+        if isinstance(value, str) and value.strip():
+            settings[f"stance_{side}"] = value.strip()
+        else:
+            bad(f"stance_{side}", "must be a non-empty string")
+            settings[f"stance_{side}"] = default
+
+    context = config.get("duel_context", "shared")
+    if context in ("shared", "split"):
+        settings["context"] = context
+    else:
+        bad("context", "must be 'shared' or 'split'")
+        settings["context"] = "shared"
+
+    for side in duel.SIDES:
+        for option in ("temperature", "seed"):
+            key = f"{option}_{side}"
+            settings[key] = None
+            value = config.get(f"duel_{key}")
+            if value is None:
+                continue
+            try:
+                value = validated(option, value)
+            except ValueError as exc:
+                bad(key, str(exc))
+                continue
+            settings[key] = None if option == "seed" and value == -1 else value
+    return settings, problems
 
 
 def apply_project(config, settings):

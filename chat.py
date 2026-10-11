@@ -18,7 +18,14 @@ import commands
 import duel
 import projects
 import server_log
-from config import apply_project, load_config_checked
+from config import (
+    OPTION_KEYS as _OPTION_KEYS,
+    apply_project,
+    duel_settings,
+    load_config_checked,
+    option_overrides,
+    validated as _validated,  # noqa: F401 (reached through the DuelHost)
+)
 from conversation import Conversation, split_think
 from duel_session import _duel_ledger, _duel_set, _duel_usage, _run_duel
 from includes import _read_file, build_message, expand_includes
@@ -109,116 +116,24 @@ def parse_args():
     return parser.parse_args()
 
 
-# The sampling options a session can override: the type /set parses and what the server
-# accepts. The server clamps most out-of-range values silently and answers a few with
-# HTTP 400, so the app checks first and refuses what it would otherwise get wrong.
-_OPTION_KEYS = {
-    "seed": int,
-    "temperature": float,
-    "top_p": float,
-    "min_p": float,
-    "repeat_penalty": float,
-    "n_predict": int,
-}
-_OPTION_RULES = {
-    "seed": (lambda v: -1 <= v <= 0xFFFFFFFF, "an integer from -1 (random) to 4294967295"),
-    "temperature": (lambda v: v >= 0, "a number >= 0 (0 is greedy)"),
-    "top_p": (lambda v: 0 <= v <= 1, "a number from 0 to 1 (1 disables it)"),
-    "min_p": (lambda v: 0 <= v <= 1, "a number from 0 to 1 (0 disables it)"),
-    "repeat_penalty": (lambda v: v > 0, "a number > 0 (1 disables it)"),
-    "n_predict": (
-        lambda v: v >= 1,
-        "an integer >= 1 (`/set n_predict default` returns to the server's limit)",
-    ),
-}
-
-
-def _validated(key, value):
-    """`value` as option `key`'s type, or ValueError saying what the option accepts.
-
-    A bool is refused (it is an int in Python), as is a float for an integer option
-    (TOML `n_predict = 5.5`); an int is fine for a float option (`temperature = 1`).
-    """
-    kind = _OPTION_KEYS[key]
-    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-    if not ok or (kind is int and not isinstance(value, int)) or not math.isfinite(value):
-        raise ValueError(f"must be {kind.__name__}")
-    value = kind(value)
-    accepts, description = _OPTION_RULES[key]
-    if not accepts(value):
-        raise ValueError(f"must be {description}")
-    return value
-
-
 def _initial_options(config, source="config.toml", quiet=False):
-    """The session's overrides from `config`: only the keys that are set and valid.
-
-    source names the file in an error message; quiet suppresses it.
-
-    State.options holds nothing else. /props reports the server's launch defaults but
-    never what a request sent, so the app must remember what it sends; every other
-    option is left out of the request and the server's own default applies.
-    """
-    options = {}
-    for key in _OPTION_KEYS:
-        if config.get(key) is None:
-            continue
-        try:
-            options[key] = _validated(key, config[key])
-        except ValueError as exc:
-            if not quiet:
-                display_warning(f"{source}: {key} {exc}; ignored.")
+    """The session's overrides from `config` (see config.option_overrides); quiet suppresses the warnings."""
+    options, problems = option_overrides(config, source)
+    if not quiet:
+        for line in problems:
+            display_warning(line)
     return options
 
 
 def _initial_duel(config, source="config.toml", quiet=False):
-    """The session's /duel settings from `config`; a bad value warns and falls back to its default.
+    """The session's /duel settings from `config` (see config.duel_settings).
 
-    Keys are the config names without the `duel_` prefix. `auto` has no config key: it
-    starts off in every session. A seed of -1 ("random") counts as unset. quiet suppresses
-    the warnings (a project switch calls this again for the same file).
+    quiet suppresses the warnings (a project switch calls this again for the same file).
     """
-    settings = {"auto": False}
-
-    def bad(key, why):
-        if not quiet:
-            display_warning(f"{source}: duel_{key} {why}; ignored.")
-
-    axes = config.get("duel_axes", duel.DEFAULT_AXES)
-    if isinstance(axes, list) and axes and all(isinstance(a, str) and a.strip() for a in axes):
-        settings["axes"] = [a.strip() for a in axes]
-    else:
-        bad("axes", "must be a non-empty list of non-empty strings")
-        settings["axes"] = list(duel.DEFAULT_AXES)
-
-    for side, default in (("a", duel.DEFAULT_STANCE_A), ("b", duel.DEFAULT_STANCE_B)):
-        value = config.get(f"duel_stance_{side}", default)
-        if isinstance(value, str) and value.strip():
-            settings[f"stance_{side}"] = value.strip()
-        else:
-            bad(f"stance_{side}", "must be a non-empty string")
-            settings[f"stance_{side}"] = default
-
-    context = config.get("duel_context", "shared")
-    if context in ("shared", "split"):
-        settings["context"] = context
-    else:
-        bad("context", "must be 'shared' or 'split'")
-        settings["context"] = "shared"
-
-    for side in duel.SIDES:
-        for option in ("temperature", "seed"):
-            key = f"{option}_{side}"
-            settings[key] = None
-            value = config.get(f"duel_{key}")
-            if value is None:
-                continue
-            try:
-                value = _validated(option, value)
-            except ValueError as exc:
-                bad(key, str(exc))
-                continue
-            settings[key] = None if option == "seed" and value == -1 else value
+    settings, problems = duel_settings(config, source)
+    if not quiet:
+        for line in problems:
+            display_warning(line)
     return settings
 
 

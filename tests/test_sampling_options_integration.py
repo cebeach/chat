@@ -83,7 +83,7 @@ class TestLaunchFlagsReachSet:
     def test_a_request_n_predict_of_minus_one_does_not_lift_the_launch_limit(self, llama_client):
         """llama-server reads -1 as "use --predict", so the app must not offer -1 as an override.
 
-        If this fails, a request can now lift the limit: allow -1 in chat._OPTION_RULES again.
+        If this fails, a request can now lift the limit: allow -1 in config.OPTION_RULES again.
         """
         _, stats = reply(llama_client, {"seed": 1, "temperature": 0, "n_predict": -1})
         assert stats["completion_tokens"] <= PREDICT
