@@ -16,11 +16,11 @@ from rich.markup import escape
 
 import commands
 import duel
+import project_session
 import projects
 import server_log
 from config import (
     OPTION_KEYS as _OPTION_KEYS,
-    apply_project,
     duel_settings,
     load_config_checked,
     option_overrides,
@@ -387,316 +387,69 @@ def _system_prompt_fits(text, client, conversation, state):
     return ok
 
 
-# ---- projects (see docs/projects.md) ----
-
-# Reserved on top of the notes-sized reply for a thinking model's reasoning in /remember.
-_REMEMBER_THINK_ALLOWANCE = 2000
+# ---- projects (see docs/projects.md and project_session.py) ----
 
 
-def _read_scope(name, state):
-    """Everything a project switch needs, read up front; None (error shown) on any failure.
+@dataclass(frozen=True)
+class ProjectHost:
+    """The chat.py names the project code uses, handed in so it never imports chat.
 
-    Reading first means a bad project.toml or an unreadable file leaves the session untouched.
+    Built per call by _project_host(); like DuelHost, every member looks its name up in
+    chat's globals when it is used.
     """
-    try:
-        path = projects.project_dir(_projects_dir(state), name)
-    except ValueError as exc:
-        display_error(str(exc))
-        return None
-    if not path.is_dir():
-        display_error(f"No project named '{name}'. Create it with /project new {name}.")
-        return None
-    try:
-        settings, ignored, problems = projects.load_settings_checked(path)
-        prompt = projects.read_system_prompt(path)
-        notes = projects.read_notes(path)
-    except (ValueError, OSError, UnicodeDecodeError) as exc:
-        display_error(f"Cannot read project '{name}': {exc}")
-        return None
-    return {
-        "name": name,
-        "dir": path,
-        "settings": settings,
-        "ignored": ignored,
-        "problems": problems,
-        "prompt": prompt,
-        "notes": notes,
-    }
+
+    auto_save: object
+    initial_duel: object
+    initial_options: object
+    projects_dir: object
+    display_error: object
+    display_info: object
+    display_notes_heavy: object
+    display_projects: object
+    display_warning: object
+    echo_suppressed: object
+    console: object
+
+
+_PROJECT_HOST_NAMES = {
+    "auto_save": "_auto_save",
+    "initial_duel": "_initial_duel",
+    "initial_options": "_initial_options",
+    "projects_dir": "_projects_dir",
+    "display_error": "display_error",
+    "display_info": "display_info",
+    "display_notes_heavy": "display_notes_heavy",
+    "display_projects": "display_projects",
+    "display_warning": "display_warning",
+    "echo_suppressed": "echo_suppressed",
+}
+
+
+def _project_host():
+    return ProjectHost(
+        **{member: _forward(name) for member, name in _PROJECT_HOST_NAMES.items()},
+        console=_ConsoleRef(),
+    )
 
 
 def _reset_session(state, settings):
-    """Settings back to config.toml plus a project's `settings`; the toggles with no key to their defaults."""
-    state.config = apply_project(state.global_config, settings)
-    state.options = _initial_options(state.global_config, quiet=True)
-    state.options.update(_initial_options(settings, source="project.toml"))
-    state.show_stats = True
-    state.duel = _initial_duel(state.global_config, quiet=True)
-    state.duel_last = None
-
-
-def _apply_scope(conversation, state, scope):
-    """Make `scope` (from _read_scope, or None for no project) the active one. Cannot fail."""
-    settings = scope["settings"] if scope else {}
-    _reset_session(state, settings)
-    prompt = scope["prompt"] if scope else ""
-    state.project = scope["name"] if scope else None
-    state.project_dir = scope["dir"] if scope else None
-    state.project_prompt = prompt or state.global_config.get("system_prompt", "")
-    state.project_source_file = str(scope["dir"] / "system.md") if prompt else None
-    conversation.system_prompt = state.project_prompt
-    conversation.source_file = state.project_source_file
-    conversation.project_notes = scope["notes"] if scope else ""
-    state.notes_digest = projects.notes_digest(conversation.project_notes)
-
-
-def _announce_scope(scope, client, conversation):
-    """The lines that follow a switch or reload: ignored keys, unknown keys and a heavy-notes warning."""
-    if not scope:
-        return
-    for key in scope["ignored"]:
-        display_info(f"project.toml: {key} is ignored; put the system prompt in system.md.")
-    for line in scope["problems"]:
-        display_warning(line)
-    notes = conversation.project_notes
-    if not notes:
-        return
-    try:
-        count = client.count_tokens(notes, add_special=False)
-        n_ctx = client.server_n_ctx
-    except (RequestException, ValueError, KeyError):
-        return
-    if isinstance(count, int) and isinstance(n_ctx, int) and tokens.notes_heavy(count, n_ctx):
-        display_notes_heavy(count, n_ctx)
+    return project_session._reset_session(state, settings, host=_project_host())
 
 
 def _switch_project(name, client, conversation, state):
-    """Switch to project `name`, or to no project when it is None. Returns True if switched.
-
-    Everything fallible is read first. The current conversation is then saved (even with
-    auto_save off) and, only if that worked, replaced by an empty one.
-    """
-    scope = _read_scope(name, state) if name else None
-    if name and scope is None:
-        return False
-    if not _auto_save(conversation, state, force=True):
-        display_error("Not switched: the current conversation could not be saved.")
-        return False
-    _apply_scope(conversation, state, scope)
-    conversation.messages.clear()
-    state.auto_save_name = "auto_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-    state.retry_text = None
-    state.pending_includes = []
-    if scope:
-        display_info(f"Project: {escape(name)} ({scope['dir']})")
-    else:
-        display_info("No project selected.")
-    display_info("Session settings were reset to the configured ones (/set, /config, /stats).")
-    _announce_scope(scope, client, conversation)
-    return True
-
-
-def _reload_project(client, conversation, state):
-    """Re-read system.md, project.md and project.toml; the conversation is kept."""
-    scope = _read_scope(state.project, state)
-    if scope is None:
-        return
-    _apply_scope(conversation, state, scope)
-    display_info(f"Project reloaded: {escape(state.project)}")
-    display_info("Session settings were reset to the configured ones (/set, /config, /stats).")
-    _announce_scope(scope, client, conversation)
+    return project_session._switch_project(name, client, conversation, state, host=_project_host())
 
 
 def _sync_notes(conversation, state, client):
-    """Pick up an outside edit of project.md; the conversation carries the file's current text.
-
-    Called before each send, so the pre-send check prices the notes that will be sent. An
-    edit invalidates the server's cached prompt prefix, so one line says so.
-    """
-    if state.project_dir is None:
-        return
-    try:
-        text = projects.read_notes(state.project_dir)
-    except (OSError, UnicodeDecodeError) as exc:
-        display_error(f"Cannot read project.md: {exc}; using the notes loaded earlier.")
-        return
-    digest = projects.notes_digest(text)
-    if digest == state.notes_digest:
-        return
-    conversation.project_notes = text
-    state.notes_digest = digest
-    try:
-        count = client.count_tokens(text, add_special=False) if text else 0
-    except (RequestException, ValueError, KeyError):
-        count = None
-    if not isinstance(count, int):
-        display_info("project.md changed.")
-        return
-    display_info(f"project.md changed: {count:,} tokens")
-    n_ctx = state.context_length
-    if n_ctx and tokens.notes_heavy(count, n_ctx):
-        display_notes_heavy(count, n_ctx)
+    return project_session._sync_notes(conversation, state, client, host=_project_host())
 
 
 def _handle_project(args, client, conversation, state):
-    parts = args.split(None, 1)
-    sub = parts[0] if parts else "info"
-    name = parts[1].strip() if len(parts) > 1 else ""
-    if sub == "info":
-        _project_info(client, conversation, state)
-    elif sub == "list":
-        display_projects(projects.list_projects(_projects_dir(state)), state.project)
-    elif sub == "new":
-        if not name:
-            display_error("Usage: /project new <name>")
-            return
-        try:
-            path = projects.create_project(_projects_dir(state), name)
-        except (ValueError, FileExistsError, OSError) as exc:
-            display_error(str(exc))
-            return
-        display_info(f"Project created: {path}. Use it with /project use {name}.")
-    elif sub == "use":
-        if not name:
-            display_error("Usage: /project use <name>")
-            return
-        _switch_project(name, client, conversation, state)
-    elif sub == "reload":
-        if not state.project:
-            display_error("No project selected. /project use <name>.")
-        else:
-            _reload_project(client, conversation, state)
-    elif sub == "leave":
-        if not state.project:
-            display_error("No project selected.")
-        else:
-            _switch_project(None, client, conversation, state)
-    else:
-        display_error("Usage: /project [info | list | new <name> | use <name> | reload | leave]")
-
-
-def _project_info(client, conversation, state):
-    if not state.project:
-        display_info("No project selected. /project list shows the projects; /project use <name> picks one.")
-        return
-    display_info(f"Project: {escape(state.project)} ({state.project_dir})")
-    notes = conversation.project_notes
-    try:
-        count = client.count_tokens(notes, add_special=False) if notes else 0
-        size = f"{count:,} tokens"
-    except (RequestException, ValueError, KeyError):
-        size = f"{len(notes):,} characters"
-    display_info(f"project.md: {size}")
-    source = "system.md" if state.project_source_file else "global system prompt"
-    display_info(f"System prompt: {source}")
-    try:
-        settings, _ = projects.load_settings(state.project_dir)
-    except ValueError:
-        settings = {}
-    if settings:
-        shown = ", ".join(f"{k} = {v}" for k, v in settings.items())
-        display_info(f"project.toml: {escape(shown)}")
-
-
-def _remember_room(messages, notes, note, client, state):
-    """True when the merge prompt and a reply the size of the notes fit the window.
-
-    Not _fits_window: this check applies even with context_check off, because a reply cut
-    off mid-file must never reach the approval step, and reserve_output_tokens is for chat
-    replies. A thinking allowance is reserved on top when there is room for it. Prints
-    why and returns False when /remember cannot go ahead.
-    """
-    outcome = "Not remembered"
-    try:
-        needed, n_ctx = client.check_fit(messages, model=state.model)
-        reply = client.count_tokens(f"{notes}\n{note}", add_special=False)
-    except KeyboardInterrupt:
-        console.print()
-        display_info("Cancelled.")
-        return False
-    except (RequestException, ValueError, KeyError) as exc:
-        display_error(f"{outcome}: could not check the context window ({exc}).")
-        return False
-    if not n_ctx:
-        display_error(f"{outcome}: the context window size is unknown.")
-        return False
-    if tokens.fits(needed, n_ctx, reply + _REMEMBER_THINK_ALLOWANCE):
-        return True
-    if tokens.fits(needed, n_ctx, reply):
-        return True  # no room for the allowance; a model that thinks long is caught by the cut-off check
-    display_error(tokens.refusal(needed, n_ctx, reply, outcome))
-    return False
+    project_session._handle_project(args, client, conversation, state, host=_project_host())
 
 
 def _handle_remember(args, client, conversation, state):
-    """/remember <text>: ask the model to merge the note into project.md, then show the diff.
-
-    The conversation is not touched. Nothing is written unless the user answers y, the
-    reply was complete and project.md is unchanged since the model saw it.
-    """
-    if not state.project_dir:
-        display_error("No project selected. /project use <name>.")
-        return
-    note = args.strip()
-    if not note:
-        display_error("Usage: /remember <text>")
-        return
-    with echo_suppressed():
-        _sync_notes(conversation, state, client)
-        notes = conversation.project_notes
-        messages = projects.remember_messages(notes, note)
-        if not _remember_room(messages, notes, note, client, state):
-            return
-        try:
-            text, cut_off, think_tags = client.complete(
-                state.model, messages, options={"temperature": 0}, refreshed=True
-            )
-        except KeyboardInterrupt:
-            console.print()
-            display_info("Cancelled. project.md is unchanged.")
-            return
-        except ConnectionError:
-            display_error("Lost connection to llama-server. Is it still running?")
-            return
-        except (ThinkTagsError, HTTPError) as exc:
-            display_error(f"Not remembered: {exc}")
-            return
-    if cut_off:
-        display_error("Not remembered: the model's reply was cut off, so project.md is unchanged.")
-        return
-    new = projects.clean_reply(text, think_tags)
-    if not new:
-        display_error("Not remembered: the model's reply was empty. project.md is unchanged.")
-        return
-    if projects.shrank_too_much(notes, new):
-        display_error("Not remembered: the reply is under half the size of project.md, so it was rejected.")
-        return
-    diff = projects.diff_text(notes, new)
-    if not diff:
-        display_info("No change: project.md already says that.")
-        return
-    console.print(diff, markup=False, highlight=False)
-    try:
-        answer = input("Write this to project.md? [y/N] ")
-    except (EOFError, KeyboardInterrupt):
-        console.print()
-        answer = ""
-    if answer.strip().lower() != "y":
-        display_info("project.md unchanged.")
-        return
-    try:
-        current = projects.read_notes(state.project_dir)
-        if projects.notes_digest(current) != state.notes_digest:
-            display_error(
-                "project.md changed while you were deciding, so nothing was written. Run /remember again."
-            )
-            return
-        projects.write_notes(state.project_dir, new)
-    except (OSError, UnicodeDecodeError) as exc:
-        display_error(f"Could not write project.md: {exc}")
-        return
-    conversation.project_notes = new
-    state.notes_digest = projects.notes_digest(new)
-    display_info("project.md updated.")
+    project_session._handle_remember(args, client, conversation, state, host=_project_host())
 
 
 # ---- /duel (see docs/duel.md) ----
