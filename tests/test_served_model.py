@@ -124,7 +124,7 @@ class TestRemovedLegacy:
         fake = mock.Mock(server_model=None, server_n_ctx=None, think_tags=None)
         fake.is_available.return_value = True
         with (
-            mock.patch.object(chat, "load_config", return_value=dict(DEFAULTS)),
+            mock.patch.object(chat, "load_config_checked", return_value=(dict(DEFAULTS), [])),
             mock.patch.object(chat, "LlamaClient", return_value=fake),
             mock.patch.object(sys, "argv", ["chat.py"]),
             mock.patch.object(chat, "display_error") as err,

@@ -32,8 +32,9 @@ project selected the app behaves exactly as before.
 - **`project.toml`** overrides settings for this project: `seed`, `temperature`, `top_p`,
   `min_p`, `repeat_penalty`, `n_predict`, `context_check` and `reserve_output_tokens`.
   Everything else (the server URL, saving, thinking) stays global. Unknown keys are
-  ignored; a `system_prompt` key is ignored with a note, because the prompt lives in
-  `system.md`.
+  ignored and reported when you enter the project or run `/project reload`, and a global key
+  such as `llama_url` is reported as global; a `system_prompt` key is ignored with a note,
+  because the prompt lives in `system.md`.
 
 ```toml
 temperature = 0.7

@@ -21,7 +21,7 @@ from rich.markup import escape
 import duel
 import projects
 import server_log
-from config import apply_project, load_config
+from config import apply_project, load_config_checked
 from conversation import Conversation, split_think
 from duel import Phase
 import tokens
@@ -48,6 +48,7 @@ from ui import (
     option_rows,
     display_stats,
     display_truncated_warning,
+    display_warning,
     echo_suppressed,
     get_multiline_input,
     get_user_input,
@@ -642,7 +643,7 @@ def _read_scope(name, state):
         display_error(f"No project named '{name}'. Create it with /project new {name}.")
         return None
     try:
-        settings, ignored = projects.load_settings(path)
+        settings, ignored, unknown = projects.load_settings_checked(path)
         prompt = projects.read_system_prompt(path)
         notes = projects.read_notes(path)
     except (ValueError, OSError, UnicodeDecodeError) as exc:
@@ -653,6 +654,7 @@ def _read_scope(name, state):
         "dir": path,
         "settings": settings,
         "ignored": ignored,
+        "unknown": unknown,
         "prompt": prompt,
         "notes": notes,
     }
@@ -684,11 +686,13 @@ def _apply_scope(conversation, state, scope):
 
 
 def _announce_scope(scope, client, conversation):
-    """The lines that follow a switch or reload: ignored keys and a heavy-notes warning."""
+    """The lines that follow a switch or reload: ignored keys, unknown keys and a heavy-notes warning."""
     if not scope:
         return
     for key in scope["ignored"]:
         display_info(f"project.toml: {key} is ignored; put the system prompt in system.md.")
+    for line in scope["unknown"]:
+        display_warning(line)
     notes = conversation.project_notes
     if not notes:
         return
@@ -1924,7 +1928,9 @@ def _auto_save(conversation, state, force=False):
 
 
 def main():
-    config = load_config()
+    config, problems = load_config_checked()
+    for line in problems:
+        display_warning(line)
     args = parse_args()
 
     client = LlamaClient(args.url or config["llama_url"], think_override=_think_override(config))

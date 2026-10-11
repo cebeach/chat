@@ -371,6 +371,10 @@ def display_info(msg):
     console.print(f"[info]{msg}[/info]")
 
 
+def display_warning(msg):
+    console.print(f"[warning]{msg}[/warning]")
+
+
 def display_error(msg):
     console.print(f"[error]{msg}[/error]")
 

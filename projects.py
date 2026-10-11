@@ -18,6 +18,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import config
 from conversation import split_think
 
 # The settings a project may override: the sampling options and the two token-budget keys.
@@ -74,16 +75,39 @@ def conversations_path(path):
     return Path(path) / "conversations"
 
 
-def load_settings(path):
-    """(settings, ignored): the allowed keys of project.toml and the keys that were dropped.
+def unknown_settings(data, ignored):
+    """One printable line per key of project.toml's `data` that is neither allowed nor in `ignored`."""
+    lines = []
+    for key in data:
+        if key in ALLOWED_SETTINGS or key in ignored:
+            continue
+        normal = config.normalize_key(key)
+        if normal in ALLOWED_SETTINGS:
+            suggestion = normal
+        elif normal in config.DEFAULTS:
+            lines.append(
+                f"project.toml: {key} is a global setting and is ignored here; "
+                f"a project may set only: {', '.join(ALLOWED_SETTINGS)}."
+            )
+            continue
+        else:
+            suggestion = config.suggest_key(key, ALLOWED_SETTINGS)
+        hint = f'; did you mean "{suggestion}"?' if suggestion else "."
+        lines.append(f'project.toml: unknown key "{key}" is ignored{hint}')
+    return lines
 
-    A missing file gives ({}, []). `ignored` lists known-removed keys the user should
+
+def load_settings_checked(path):
+    """(settings, ignored, unknown): the allowed keys of project.toml, the known-removed keys
+    that were dropped, and one printable line per other key that was dropped.
+
+    A missing file gives ({}, [], []). `ignored` lists known-removed keys the user should
     move (currently system_prompt). Raises ValueError naming the file when it is not
-    valid TOML.
+    valid TOML or a value is wrong.
     """
     file = Path(path) / "project.toml"
     if not file.is_file():
-        return {}, []
+        return {}, [], []
     try:
         with open(file, "rb") as f:
             data = tomllib.load(f)
@@ -95,7 +119,13 @@ def load_settings(path):
     reserve = settings.get("reserve_output_tokens", 0)
     if isinstance(reserve, bool) or not isinstance(reserve, int) or reserve < 0:
         raise ValueError(f"{file}: reserve_output_tokens must be an integer >= 0")
-    return settings, [k for k in ("system_prompt",) if k in data]
+    ignored = [k for k in ("system_prompt",) if k in data]
+    return settings, ignored, unknown_settings(data, ignored)
+
+
+def load_settings(path):
+    """(settings, ignored) of load_settings_checked(): the allowed keys and the removed ones."""
+    return load_settings_checked(path)[:2]
 
 
 def _read(file):

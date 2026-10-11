@@ -119,6 +119,43 @@ class TestSystemPrompt:
         assert any("system_prompt is ignored" in i for i in session.infos)
 
 
+class TestUnknownProjectKeys:
+    """A key project.toml does not know is reported when the project is entered or reloaded."""
+
+    BAD = "temprature = 0.2\n"
+
+    def test_startup_reports_it(self, tmp_path):
+        make_project(tmp_path, toml=self.BAD)
+        session = session_in(tmp_path, (None,), argv=("--project", "novel"))
+        assert session.warnings == [
+            'project.toml: unknown key "temprature" is ignored; did you mean "temperature"?'
+        ]
+
+    def test_use_reports_it(self, tmp_path):
+        make_project(tmp_path, toml=self.BAD)
+        session = session_in(tmp_path, ("/project use novel", None))
+        assert len(session.warnings) == 1
+        assert "did you mean" in session.warnings[0]
+
+    def test_reload_reports_it_again_until_it_is_fixed(self, tmp_path):
+        path = make_project(tmp_path, toml=self.BAD)
+
+        def inputs():
+            yield "/project reload"
+            (path / "project.toml").write_text("temperature = 0.2\n")
+            yield "/project reload"
+            yield None
+
+        session = session_in(tmp_path, inputs(), argv=("--project", "novel"))
+        # startup, then the first reload; the second reload (after the fix) adds nothing
+        assert len(session.warnings) == 2
+
+    def test_a_clean_project_toml_reports_nothing(self, tmp_path):
+        make_project(tmp_path, toml="temperature = 0.2\n")
+        session = session_in(tmp_path, (None,), argv=("--project", "novel"))
+        assert session.warnings == []
+
+
 class TestSwitching:
     def test_use_saves_the_old_conversation_then_the_new_one_in_the_project(self, tmp_path):
         path = make_project(tmp_path)
