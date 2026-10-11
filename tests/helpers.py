@@ -182,7 +182,7 @@ class Reply:
 
 
 class ScriptedStream:
-    """Stands in for LlamaChatStream with the attributes chat._run_phase reads."""
+    """Stands in for LlamaChatStream with the attributes duel_session._run_phase reads."""
 
     def __init__(self, reply, barrier=None):
         self.reply, self.barrier = reply, barrier
