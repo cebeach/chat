@@ -12,6 +12,7 @@ able to raise from inside the stream.
 """
 
 import sys
+from contextlib import nullcontext
 from unittest import mock
 
 import pytest
@@ -134,7 +135,7 @@ def run_session(
         log.append(("display_info", rec.active))
 
     inputs = iter(inputs)
-    multiline = iter(multiline)
+    multiline = iter(multiline) if multiline else None
     client = mock.Mock(server_model="/m/x.gguf", server_n_ctx=4096, think_tags=None)
     client.is_available.return_value = True
     client.chat.side_effect = client_chat
@@ -171,7 +172,9 @@ def run_session(
         mock.patch.object(chat, "init_readline"),
         mock.patch.object(chat, "save_readline_history"),
         mock.patch.object(chat, "echo_suppressed", rec),
-        mock.patch.object(chat, "get_multiline_input", lambda: next(multiline)),
+        mock.patch.object(chat, "get_multiline_input", lambda: next(multiline))
+        if multiline
+        else nullcontext(),
         mock.patch.object(chat, "get_user_input", logged("get_user_input", lambda: next(inputs))),
         mock.patch.object(chat, "display_assistant_stream", logged("display", ui.display_assistant_stream)),
         mock.patch.object(chat, "display_stats", logged("stats", ui.display_stats)),
