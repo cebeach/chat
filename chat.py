@@ -772,6 +772,118 @@ def _auto_save(conversation, state, force=False):
     return True
 
 
+@dataclass(frozen=True)
+class Turn:
+    """A message ready to send: its text, the files spliced into it, and the history before it."""
+
+    text: str
+    includes: list
+    history: list  # what /retry may take away, if the send is refused
+
+
+_REPROMPT = object()  # nothing to send; prompt again
+_STOP = object()  # EOF or /exit; leave the loop
+
+
+def _read_turn(client, conversation, state):
+    """Read until there is something to send: a Turn, or _REPROMPT / _STOP."""
+    user_input = get_user_input()
+
+    if user_input is None:  # EOF
+        console.print()
+        return _STOP
+
+    text = user_input.strip()
+    if not text:
+        return _REPROMPT
+
+    # Multiline input mode
+    if text == '"""':
+        text = get_multiline_input()
+        if text is None:
+            console.print()
+            return _STOP
+        if not text.strip():
+            return _REPROMPT
+
+    history = list(conversation.messages)
+    if text.startswith("/"):
+        parts = text.split(None, 1)
+        cmd = parts[0].lower()
+        cmd_args = parts[1] if len(parts) > 1 else ""
+        if not handle_command(cmd, cmd_args, client, conversation, state):
+            return _STOP
+        # Check if /retry or /read set text to re-send
+        if state.retry_text is None:
+            # Commands don't become messages
+            return _REPROMPT
+        text = state.retry_text
+        state.retry_text = None
+        # /read and /retry hand over the files the text came from
+        includes, state.pending_includes = state.pending_includes, []
+        return Turn(text, includes, history)
+
+    # Not a command: splice in any @@<path> files. A bad include aborts the send,
+    # so nothing is added to the conversation and the model never sees the text.
+    prepared = _prepare_user_message(text)
+    if prepared is None:
+        return _REPROMPT
+    text, includes = prepared
+    return Turn(text, includes, history)
+
+
+def _send_turn(turn, client, conversation, state):
+    """Check that the message fits, send it and show and store the reply."""
+    # Echo is off for the whole turn (check, request, reply, stats, autosave) and comes
+    # back just before the next prompt: readline entered with ECHO off draws nothing.
+    with echo_suppressed():
+        # An outside edit of project.md joins the prompt before it is priced.
+        _sync_notes(conversation, state, client)
+        # The message joins the conversation only once its prompt is known to fit.
+        candidate = conversation.get_messages() + [{"role": "user", "content": turn.text}]
+        fits, priced = _fits_window(client, candidate, state)
+        if not fits:
+            conversation.messages[:] = turn.history  # a refused /retry loses nothing
+            console.print()
+            return
+        if priced and turn.includes:
+            display_prompt_size(*priced)
+        conversation.add_user(turn.text, includes=turn.includes)
+        try:
+            chat_stream = client.chat(
+                model=state.model,
+                messages=conversation.get_messages(),
+                options=state.options,
+                refreshed=priced is not None,
+            )
+            # Before the reply is shown and before any autosave, so they already
+            # know this model, its context length and its tags.
+            _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
+            _update_think_tags(state, chat_stream.think_tags)
+            response = display_assistant_stream(chat_stream, think_end=_think_end(state))
+            _store_reply(conversation, response, chat_stream, state)
+            if chat_stream.truncated:
+                display_truncated_warning(not conversation.messages[-1]["content"])
+            if state.show_stats:
+                display_stats(chat_stream.stats, state.context_length)
+            _auto_save(conversation, state)
+        except KeyboardInterrupt:
+            console.print()
+            display_info("Response interrupted.")
+        except ConnectionError:
+            display_error("Lost connection to llama-server. Is it still running?")
+            # Remove the unanswered user message
+            conversation.messages.pop()
+        except ThinkTagsError as e:
+            display_error(str(e))
+            conversation.messages.pop()
+        except HTTPError as e:
+            display_error(f"llama-server error: {e}")
+            conversation.messages.pop()
+
+        console.print()
+
+
 def main():
     config, problems = load_config_checked()
     for line in problems:
@@ -819,96 +931,11 @@ def main():
     # Main REPL
     try:
         while True:
-            user_input = get_user_input()
-
-            if user_input is None:  # EOF
-                console.print()
+            turn = _read_turn(client, conversation, state)
+            if turn is _STOP:
                 break
-
-            text = user_input.strip()
-            if not text:
-                continue
-
-            # Multiline input mode
-            if text == '"""':
-                text = get_multiline_input()
-                if text is None:
-                    console.print()
-                    break
-                if not text.strip():
-                    continue
-
-            # Handle commands
-            history = list(conversation.messages)  # what /retry may take away, if the send is refused
-            if text.startswith("/"):
-                parts = text.split(None, 1)
-                cmd = parts[0].lower()
-                cmd_args = parts[1] if len(parts) > 1 else ""
-                if not handle_command(cmd, cmd_args, client, conversation, state):
-                    break
-                # Check if /retry or /read set text to re-send
-                if state.retry_text is None:
-                    # Commands don't become messages
-                    continue
-                text = state.retry_text
-                state.retry_text = None
-                # /read and /retry hand over the files the text came from
-                includes, state.pending_includes = state.pending_includes, []
-            else:
-                # Not a command: splice in any @@<path> files. A bad include aborts the send,
-                # so nothing is added to the conversation and the model never sees the text.
-                prepared = _prepare_user_message(text)
-                if prepared is None:
-                    continue
-                text, includes = prepared
-
-            # Echo is off for the whole turn (check, request, reply, stats, autosave) and comes
-            # back just before the next prompt: readline entered with ECHO off draws nothing.
-            with echo_suppressed():
-                # An outside edit of project.md joins the prompt before it is priced.
-                _sync_notes(conversation, state, client)
-                # The message joins the conversation only once its prompt is known to fit.
-                candidate = conversation.get_messages() + [{"role": "user", "content": text}]
-                fits, priced = _fits_window(client, candidate, state)
-                if not fits:
-                    conversation.messages[:] = history  # a refused /retry loses nothing
-                else:
-                    if priced and includes:
-                        display_prompt_size(*priced)
-                    conversation.add_user(text, includes=includes)
-                    try:
-                        chat_stream = client.chat(
-                            model=state.model,
-                            messages=conversation.get_messages(),
-                            options=state.options,
-                            refreshed=priced is not None,
-                        )
-                        # Before the reply is shown and before any autosave, so they already
-                        # know this model, its context length and its tags.
-                        _sync_server_info(state, chat_stream.server_model, chat_stream.server_n_ctx)
-                        _update_think_tags(state, chat_stream.think_tags)
-                        response = display_assistant_stream(chat_stream, think_end=_think_end(state))
-                        _store_reply(conversation, response, chat_stream, state)
-                        if chat_stream.truncated:
-                            display_truncated_warning(not conversation.messages[-1]["content"])
-                        if state.show_stats:
-                            display_stats(chat_stream.stats, state.context_length)
-                        _auto_save(conversation, state)
-                    except KeyboardInterrupt:
-                        console.print()
-                        display_info("Response interrupted.")
-                    except ConnectionError:
-                        display_error("Lost connection to llama-server. Is it still running?")
-                        # Remove the unanswered user message
-                        conversation.messages.pop()
-                    except ThinkTagsError as e:
-                        display_error(str(e))
-                        conversation.messages.pop()
-                    except HTTPError as e:
-                        display_error(f"llama-server error: {e}")
-                        conversation.messages.pop()
-
-                console.print()
+            if turn is not _REPROMPT:
+                _send_turn(turn, client, conversation, state)
     finally:
         _auto_save(conversation, state)
         save_readline_history()

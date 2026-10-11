@@ -12,6 +12,7 @@ able to raise from inside the stream.
 """
 
 import sys
+from contextlib import nullcontext
 from unittest import mock
 
 import pytest
@@ -89,12 +90,14 @@ def run_session(
     setup=None,
     answers=(),
     on_input=None,
+    multiline=(),
 ):
     """Run main() over `inputs` (None is EOF). check_fit is what client.check_fit returns,
     or an exception to raise from inside the check; a list gives one result per call.
     argv adds command-line arguments; setup(client) runs before main() to script the mock
     client; answers feed input() (the /remember approval prompt): a string, or an exception to raise.
-    on_input(prompt, echo_suppressed_active), when given, is called at every input()."""
+    on_input(prompt, echo_suppressed_active), when given, is called at every input().
+    multiline feeds get_multiline_input after a triple-quote line (None is EOF)."""
     session = Session()
     log, infos = session.log, session.infos
     rec = Recorder(log)
@@ -132,6 +135,7 @@ def run_session(
         log.append(("display_info", rec.active))
 
     inputs = iter(inputs)
+    multiline = iter(multiline) if multiline else None
     client = mock.Mock(server_model="/m/x.gguf", server_n_ctx=4096, think_tags=None)
     client.is_available.return_value = True
     client.chat.side_effect = client_chat
@@ -168,6 +172,9 @@ def run_session(
         mock.patch.object(chat, "init_readline"),
         mock.patch.object(chat, "save_readline_history"),
         mock.patch.object(chat, "echo_suppressed", rec),
+        mock.patch.object(chat, "get_multiline_input", lambda: next(multiline))
+        if multiline
+        else nullcontext(),
         mock.patch.object(chat, "get_user_input", logged("get_user_input", lambda: next(inputs))),
         mock.patch.object(chat, "display_assistant_stream", logged("display", ui.display_assistant_stream)),
         mock.patch.object(chat, "display_stats", logged("stats", ui.display_stats)),
@@ -384,6 +391,58 @@ class TestRefusedCommands:
         with mock.patch.object(chat, "display_prompt_size") as shown:
             run_session(tmp_path, lambda: FakeStream(["x"]), check_fit=(1000, 4096))
         shown.assert_not_called()
+
+
+class TestReadLoopBranches:
+    """What the read half of the loop does with each kind of input."""
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_input_reprompts_without_a_turn(self, tmp_path, blank):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), inputs=(blank, None))
+        assert session.chat_calls == [] and "enter" not in [n for n, _ in session.log]
+
+    def test_multiline_text_is_sent(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["r"]), inputs=('"""', None), multiline=("a\nb",))
+        assert [m["content"] for m in session.conversation.messages] == ["a\nb", "r"]
+
+    def test_multiline_eof_ends_the_session_with_a_blank_line(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), inputs=('"""',), multiline=(None,))
+        names = [n for n, _ in session.log]
+        assert session.chat_calls == [] and names[-2:] == ["print", "auto_save"]
+
+    def test_empty_multiline_text_reprompts(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), inputs=('"""', None), multiline=("  ",))
+        assert session.chat_calls == [] and "enter" not in [n for n, _ in session.log]
+
+    def test_a_command_that_sends_nothing_continues_the_loop(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["r"]), inputs=("/help", "hello", None))
+        assert len(session.chat_calls) == 1
+
+    def test_exit_stops_the_loop_and_the_final_autosave_runs(self, tmp_path):
+        session = run_session(tmp_path, lambda: FakeStream(["r"]), inputs=("hello", "/exit", "never"))
+        assert len(session.chat_calls) == 1
+        # one from the turn, one from /exit itself, one from the loop's finally
+        assert [n for n, _ in session.log].count("auto_save") == 3
+        assert session.infos[-1] == "Goodbye!"
+
+    def test_a_bad_include_aborts_the_send(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        session = run_session(tmp_path, lambda: FakeStream(["x"]), inputs=("see @@<missing.txt>", None))
+        assert session.chat_calls == [] and session.conversation.messages == []
+        assert session.errors and "enter" not in [n for n, _ in session.log]
+
+    def test_think_tags_error_is_reported_and_the_message_removed(self, tmp_path):
+        def behaviour():
+            raise chat.ThinkTagsError("bad tags")
+
+        session = run_session(tmp_path, behaviour)
+        assert session.errors == ["bad tags"] and session.conversation.messages == []
+
+    def test_read_resend_stores_the_includes(self, tmp_path, monkeypatch):
+        (tmp_path / "f.txt").write_text("some text")
+        monkeypatch.chdir(tmp_path)
+        session = run_session(tmp_path, lambda: FakeStream(["r"]), inputs=("/read f.txt", None))
+        assert session.conversation.messages[0].get("includes")
 
 
 class TestTruncatedReply:
