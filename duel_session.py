@@ -158,6 +158,102 @@ def _price_phase(phase, jobs, client, state, held, host):
     return priced, None
 
 
+def _stream_parts(parts, threads, state, interrupted, host):
+    """Start the workers and show each participant in turn; a Ctrl-C sets `interrupted`.
+
+    The first participant streams live; each other one is shown, in full, through the same
+    display once it is its turn (everything received so far, then the rest live). Starting the
+    threads is inside the try: a Ctrl-C can arrive before the display begins.
+    """
+    try:
+        for thread in threads:
+            thread.start()
+        for part in parts:
+            stream = _await_start(part)
+            if stream is not None:
+                host.sync_server_info(state, stream.server_model, stream.server_n_ctx)
+                host.update_think_tags(state, stream.think_tags)
+                host.display_assistant_stream(
+                    _drain(part),
+                    think_end=stream.think_tags[1] if stream.think_tags else None,
+                    label=f"{duel.side_label(part.job.key)}:",
+                    interrupted=interrupted,
+                )
+            if interrupted.is_set() or part.error is not None:
+                break
+            if state.show_stats:
+                host.display_stats(part.stats)
+    except KeyboardInterrupt:
+        interrupted.set()
+
+
+def _phase_cause(phase, parts, interrupted, host):
+    """Why the phase ended abnormally (one of duel.CAUSES, the reason shown), or None."""
+    complete = all(p.done.is_set() and p.error is None for p in parts)
+    if interrupted.is_set() and not complete:
+        host.console.print()
+        host.display_info(f"{phase.value} interrupted.")
+        return "interrupted"
+    if any(p.error is not None for p in parts):
+        for part in parts:
+            if part.error is not None:
+                host.display_error(_duel_error_text(part.error, duel.side_label(part.job.key)))
+        return "server_error"
+    if any(p.cut_off for p in parts):
+        for part in parts:
+            if part.cut_off:
+                host.display_error(
+                    f"{duel.side_label(part.job.key)}'s reply in {phase.value} was cut off "
+                    "(context window full or token limit), so the phase is discarded."
+                )
+        return "cut_off"
+    return None
+
+
+def _collect_turns(phase, parts, state, host):
+    """Each part's finished _Turn. Returns (turns, None) or ({...partial}, cause)."""
+    turns = {}
+    for part in parts:
+        text = "".join(part.tokens)
+        tags = part.stream.think_tags
+        thinking, answer = split_think(text, tags)
+        if not duel.usable_text(phase, answer):
+            if phase in duel.EMPTY_IS_ABNORMAL:
+                host.display_error(
+                    f"{duel.side_label(part.job.key)} gave no answer in {phase.value}, "
+                    "so the phase is discarded."
+                )
+                return turns, "empty_answer"
+            answer = duel.NO_ANSWER
+        turns[part.job.key] = _Turn(answer, thinking, part.stats, host.reply_model(part.stream, state))
+    return turns, None
+
+
+def _discard(parts, marks, priced, held, reserve, stop):
+    """Undo an abnormal phase: stop the workers, close the streams, drop what it appended."""
+    stop.set()
+    for part in parts:
+        if part.stream is not None:
+            part.stream.close()
+    for conversation, size in marks:
+        del conversation.messages[size:]
+    for part in parts:  # the slot also holds what the discarded turn used
+        if priced[part.job.key] is not None:
+            needed = priced[part.job.key][0] + reserve
+            held[part.job.slot] = max(held.get(part.job.slot, 0), needed)
+
+
+def _commit(parts, threads, turns, held):
+    """Keep a normal phase: add each answer to its conversation and record the slot's tokens."""
+    for part in parts:
+        turn = turns[part.job.key]
+        part.job.conversation.add_assistant(turn.answer, model=turn.model, thinking=turn.thinking or None)
+        if turn.stats.get("context_tokens"):
+            held[part.job.slot] = turn.stats["context_tokens"]
+    for thread in threads:
+        thread.join(timeout=5)
+
+
 def _run_phase(phase, jobs, client, state, held, host):
     """Run one phase: every job takes one turn, concurrently when there are several.
 
@@ -187,89 +283,15 @@ def _run_phase(phase, jobs, client, state, held, host):
             )
             for part in parts
         ]
-        # The first participant streams live; each other one is shown, in full, through the
-        # same display once it is its turn (everything received so far, then the rest live).
-        # Starting the threads is inside the try: a Ctrl-C can arrive before the display begins.
-        try:
-            for thread in threads:
-                thread.start()
-            for part in parts:
-                stream = _await_start(part)
-                if stream is not None:
-                    host.sync_server_info(state, stream.server_model, stream.server_n_ctx)
-                    host.update_think_tags(state, stream.think_tags)
-                    host.display_assistant_stream(
-                        _drain(part),
-                        think_end=stream.think_tags[1] if stream.think_tags else None,
-                        label=f"{duel.side_label(part.job.key)}:",
-                        interrupted=interrupted,
-                    )
-                if interrupted.is_set() or part.error is not None:
-                    break
-                if state.show_stats:
-                    host.display_stats(part.stats)
-        except KeyboardInterrupt:
-            interrupted.set()
-
-        complete = all(p.done.is_set() and p.error is None for p in parts)
-        cause = None
-        if interrupted.is_set() and not complete:
-            host.console.print()
-            host.display_info(f"{phase.value} interrupted.")
-            cause = "interrupted"
-        elif any(p.error is not None for p in parts):
-            for part in parts:
-                if part.error is not None:
-                    host.display_error(_duel_error_text(part.error, duel.side_label(part.job.key)))
-            cause = "server_error"
-        elif any(p.cut_off for p in parts):
-            for part in parts:
-                if part.cut_off:
-                    host.display_error(
-                        f"{duel.side_label(part.job.key)}'s reply in {phase.value} was cut off "
-                        "(context window full or token limit), so the phase is discarded."
-                    )
-            cause = "cut_off"
-
+        _stream_parts(parts, threads, state, interrupted, host)
+        cause = _phase_cause(phase, parts, interrupted, host)
         turns = {}
         if cause is None:
-            for part in parts:
-                text = "".join(part.tokens)
-                tags = part.stream.think_tags
-                thinking, answer = split_think(text, tags)
-                if not duel.usable_text(phase, answer):
-                    if phase in duel.EMPTY_IS_ABNORMAL:
-                        host.display_error(
-                            f"{duel.side_label(part.job.key)} gave no answer in {phase.value}, "
-                            "so the phase is discarded."
-                        )
-                        cause = "empty_answer"
-                        break
-                    answer = duel.NO_ANSWER
-                turns[part.job.key] = _Turn(
-                    answer, thinking, part.stats, host.reply_model(part.stream, state)
-                )
-
+            turns, cause = _collect_turns(phase, parts, state, host)
         if cause is not None:
-            stop.set()
-            for part in parts:
-                if part.stream is not None:
-                    part.stream.close()
-            for conversation, size in marks:
-                del conversation.messages[size:]
-            for part in parts:  # the slot also holds what the discarded turn used
-                if priced[part.job.key] is not None:
-                    needed = priced[part.job.key][0] + reserve
-                    held[part.job.slot] = max(held.get(part.job.slot, 0), needed)
+            _discard(parts, marks, priced, held, reserve, stop)
             return _PhaseResult(False, cause)
-
-        for part in parts:
-            turn = turns[part.job.key]
-            part.job.conversation.add_assistant(turn.answer, model=turn.model, thinking=turn.thinking or None)
-            if turn.stats.get("context_tokens"):
-                held[part.job.slot] = turn.stats["context_tokens"]
-        for thread in threads:
-            thread.join(timeout=5)
+        _commit(parts, threads, turns, held)
         return _PhaseResult(True, None, turns)
 
 
