@@ -6,6 +6,7 @@ import re
 import pytest
 
 import chat
+import includes
 import conv2txt
 import ui
 from chat import State, _prepare_user_message, build_message, expand_includes, handle_command
@@ -122,7 +123,7 @@ class TestAborts:
 
     def test_a_file_over_the_read_guard_aborts(self, cwd, monkeypatch):
         """The fixed memory guard, not a context limit: that is the token check's job."""
-        monkeypatch.setattr(chat, "_READ_FILE_MAX_BYTES", 1024)
+        monkeypatch.setattr(includes, "_READ_FILE_MAX_BYTES", 1024)
         (cwd / "big.txt").write_text("x" * 2048)
         flat, _, errors = expand("@@<big.txt>")
         assert flat == ""
