@@ -791,6 +791,70 @@ def _handle_remember(args, client, conversation, state):
 # ---- /duel (see docs/duel.md) ----
 
 
+@dataclass(frozen=True)
+class DuelHost:
+    """The chat.py names the duel code uses, handed in so it never imports chat.
+
+    Built per call by _duel_host(); every member looks its name up in chat's globals when it
+    is used, so a test patching chat.<name> reaches the duel code.
+    """
+
+    auto_save: object
+    conversations_dir: object
+    fits_window: object
+    initial_duel: object
+    prepare_user_message: object
+    reply_model: object
+    sync_notes: object
+    sync_server_info: object
+    update_think_tags: object
+    validated: object
+    display_error: object
+    display_info: object
+    display_ledger: object
+    display_stats: object
+    display_assistant_stream: object
+    echo_suppressed: object
+    get_multiline_input: object
+    console: object
+
+
+class _ConsoleRef:
+    """Forwards every attribute to chat's current `console`."""
+
+    def __getattr__(self, name):
+        return getattr(globals()["console"], name)
+
+
+def _forward(name):
+    return lambda *args, **kwargs: globals()[name](*args, **kwargs)
+
+
+_HOST_NAMES = {
+    "auto_save": "_auto_save",
+    "conversations_dir": "_conversations_dir",
+    "fits_window": "_fits_window",
+    "initial_duel": "_initial_duel",
+    "prepare_user_message": "_prepare_user_message",
+    "reply_model": "_reply_model",
+    "sync_notes": "_sync_notes",
+    "sync_server_info": "_sync_server_info",
+    "update_think_tags": "_update_think_tags",
+    "validated": "_validated",
+    "display_error": "display_error",
+    "display_info": "display_info",
+    "display_ledger": "display_ledger",
+    "display_stats": "display_stats",
+    "display_assistant_stream": "display_assistant_stream",
+    "echo_suppressed": "echo_suppressed",
+    "get_multiline_input": "get_multiline_input",
+}
+
+
+def _duel_host():
+    return DuelHost(**{member: _forward(name) for member, name in _HOST_NAMES.items()}, console=_ConsoleRef())
+
+
 @dataclass
 class _Job:
     """One participant's turn in a phase: whose conversation, what to say, which slot."""
@@ -895,18 +959,19 @@ def _reserve(state):
     return max(state.config.get("reserve_output_tokens", 0), state.options.get("n_predict", 0))
 
 
-def _price_phase(phase, jobs, client, state, held):
+def _price_phase(phase, jobs, client, state, held, host=None):
     """Price every participant, then the pool. Returns (priced, None) or (None, cause).
 
     Each participant is priced alone by _fits_window, which prints its own refusal; only if
     all pass is the joint rule applied. `priced` maps a job key to (needed, n_ctx) or None
     (pricing unavailable: nothing is refused, the request that follows meets any real problem).
     """
+    host = host or _duel_host()
     priced = {}
     for job in jobs:
         candidate = job.conversation.get_messages() + [{"role": "user", "content": job.text}]
         outcome = f"Not sent ({duel.side_label(job.key)}, {phase.value})"
-        ok, result = _fits_window(client, candidate, state, outcome=outcome)
+        ok, result = host.fits_window(client, candidate, state, outcome=outcome)
         if not ok:
             return None, "interrupted" if result is None else "context"
         priced[job.key] = result
@@ -918,12 +983,12 @@ def _price_phase(phase, jobs, client, state, held):
         reserve = _reserve(state)
         if not tokens.fits_together(needed, idle, n_ctx, reserve):
             outcome = f"Not sent ({phase.value})"
-            display_error(tokens.refusal_together(needed, idle, n_ctx, reserve, outcome))
+            host.display_error(tokens.refusal_together(needed, idle, n_ctx, reserve, outcome))
             return None, "context"
     return priced, None
 
 
-def _run_phase(phase, jobs, client, state, held):
+def _run_phase(phase, jobs, client, state, held, host=None):
     """Run one phase: every job takes one turn, concurrently when there are several.
 
     Returns a _PhaseResult. A phase that ends abnormally is discarded as a whole: each
@@ -931,8 +996,9 @@ def _run_phase(phase, jobs, client, state, held):
     `held` maps a slot to the tokens it still holds; it is updated here. Everything runs with
     the keyboard echo off; threads exist only inside this call.
     """
-    with echo_suppressed():
-        priced, cause = _price_phase(phase, jobs, client, state, held)
+    host = host or _duel_host()
+    with host.echo_suppressed():
+        priced, cause = _price_phase(phase, jobs, client, state, held, host=host)
         if priced is None:
             return _PhaseResult(False, cause)
         marks = [(job.conversation, len(job.conversation.messages)) for job in jobs]
@@ -961,9 +1027,9 @@ def _run_phase(phase, jobs, client, state, held):
             for part in parts:
                 stream = _await_start(part)
                 if stream is not None:
-                    _sync_server_info(state, stream.server_model, stream.server_n_ctx)
-                    _update_think_tags(state, stream.think_tags)
-                    display_assistant_stream(
+                    host.sync_server_info(state, stream.server_model, stream.server_n_ctx)
+                    host.update_think_tags(state, stream.think_tags)
+                    host.display_assistant_stream(
                         _drain(part),
                         think_end=stream.think_tags[1] if stream.think_tags else None,
                         label=f"{duel.side_label(part.job.key)}:",
@@ -972,25 +1038,25 @@ def _run_phase(phase, jobs, client, state, held):
                 if interrupted.is_set() or part.error is not None:
                     break
                 if state.show_stats:
-                    display_stats(part.stats)
+                    host.display_stats(part.stats)
         except KeyboardInterrupt:
             interrupted.set()
 
         complete = all(p.done.is_set() and p.error is None for p in parts)
         cause = None
         if interrupted.is_set() and not complete:
-            console.print()
-            display_info(f"{phase.value} interrupted.")
+            host.console.print()
+            host.display_info(f"{phase.value} interrupted.")
             cause = "interrupted"
         elif any(p.error is not None for p in parts):
             for part in parts:
                 if part.error is not None:
-                    display_error(_duel_error_text(part.error, duel.side_label(part.job.key)))
+                    host.display_error(_duel_error_text(part.error, duel.side_label(part.job.key)))
             cause = "server_error"
         elif any(p.cut_off for p in parts):
             for part in parts:
                 if part.cut_off:
-                    display_error(
+                    host.display_error(
                         f"{duel.side_label(part.job.key)}'s reply in {phase.value} was cut off "
                         "(context window full or token limit), so the phase is discarded."
                     )
@@ -1004,14 +1070,16 @@ def _run_phase(phase, jobs, client, state, held):
                 thinking, answer = split_think(text, tags)
                 if not duel.usable_text(phase, answer):
                     if phase in duel.EMPTY_IS_ABNORMAL:
-                        display_error(
+                        host.display_error(
                             f"{duel.side_label(part.job.key)} gave no answer in {phase.value}, "
                             "so the phase is discarded."
                         )
                         cause = "empty_answer"
                         break
                     answer = duel.NO_ANSWER
-                turns[part.job.key] = _Turn(answer, thinking, part.stats, _reply_model(part.stream, state))
+                turns[part.job.key] = _Turn(
+                    answer, thinking, part.stats, host.reply_model(part.stream, state)
+                )
 
         if cause is not None:
             stop.set()
@@ -1088,20 +1156,27 @@ class _Duel:
     record: dict = field(default_factory=dict)
 
 
-def _duel_usage(client, state):
+def _duel_usage(client, state, host=None):
     """/duel alone: usage, the settings and what the server offers."""
+    host = host or _duel_host()
     client.refresh()
     slots = client.server_slots if client.server_slots is not None else "unknown"
     n_ctx = f"{client.server_n_ctx:,}" if client.server_n_ctx else "unknown"
     setting = state.duel
-    display_info('Usage: /duel [--auto] <brief>   (""" for a multiline brief; -- ends flag parsing)')
-    display_info("       /duel set <key> <value>   keys: " + ", ".join(_DUEL_KEYS) + "; 'default' resets")
-    display_info("       /duel ledger              show the last duel's issues")
-    display_info(f"Server slots: {slots} (a duel needs 2: llama-server --parallel 2); context n_ctx: {n_ctx}")
-    display_info(
+    host.display_info('Usage: /duel [--auto] <brief>   (""" for a multiline brief; -- ends flag parsing)')
+    host.display_info(
+        "       /duel set <key> <value>   keys: " + ", ".join(_DUEL_KEYS) + "; 'default' resets"
+    )
+    host.display_info("       /duel ledger              show the last duel's issues")
+    host.display_info(
+        f"Server slots: {slots} (a duel needs 2: llama-server --parallel 2); context n_ctx: {n_ctx}"
+    )
+    host.display_info(
         f"Context assumption: {setting['context']} (shared: both sides share one pool of n_ctx; split: each has n_ctx)"
     )
-    display_info(f"Axes: {', '.join(setting['axes'])}; auto pauses: {'off' if setting['auto'] else 'on'}")
+    host.display_info(
+        f"Axes: {', '.join(setting['axes'])}; auto pauses: {'off' if setting['auto'] else 'on'}"
+    )
     for side in duel.SIDES:
         extra = [
             f"{k.split('_')[0]} {setting[k]}"
@@ -1109,22 +1184,23 @@ def _duel_usage(client, state):
             if setting[k] is not None
         ]
         suffix = f" ({', '.join(extra)})" if extra else ""
-        display_info(f"Side {side.upper()}{suffix}: {escape(setting[f'stance_{side}'])}")
+        host.display_info(f"Side {side.upper()}{suffix}: {escape(setting[f'stance_{side}'])}")
 
 
-def _duel_set(key, value, state):
+def _duel_set(key, value, state, host=None):
     """/duel set <key> <value>: change a setting for this session ('default' resets it)."""
+    host = host or _duel_host()
     if key not in _DUEL_KEYS:
-        display_error(f"Unknown duel setting: {key}. Available: {', '.join(_DUEL_KEYS)}")
+        host.display_error(f"Unknown duel setting: {key}. Available: {', '.join(_DUEL_KEYS)}")
         return
     value = value.strip()
     if not value:
-        display_info(f"{key}: {state.duel[key]}")
+        host.display_info(f"{key}: {state.duel[key]}")
         return
-    defaults = _initial_duel(state.global_config, quiet=True)
+    defaults = host.initial_duel(state.global_config, quiet=True)
     if value == "default":
         state.duel[key] = defaults[key]
-        display_info(f"{key} reset to {defaults[key]}.")
+        host.display_info(f"{key} reset to {defaults[key]}.")
         return
     try:
         if key == "axes":
@@ -1148,22 +1224,23 @@ def _duel_set(key, value, state):
                 number = _OPTION_KEYS[option](value)
             except ValueError:
                 raise ValueError(f"{key} must be {_OPTION_KEYS[option].__name__} (or 'default')") from None
-            new = _validated(option, number)
+            new = host.validated(option, number)
             if option == "seed" and new == -1:
                 new = None
     except ValueError as exc:
-        display_error(f"{key}: {exc}.")
+        host.display_error(f"{key}: {exc}.")
         return
     state.duel[key] = new
-    display_info(f"{key} set to {new}.")
+    host.display_info(f"{key} set to {new}.")
 
 
-def _duel_ledger(state):
+def _duel_ledger(state, host=None):
+    host = host or _duel_host()
     record = state.duel_last
     if record is None:
-        display_info("No duel yet.")
+        host.display_info("No duel yet.")
         return
-    display_ledger([duel.Issue(**i) for i in record["ledger"]["issues"]])
+    host.display_ledger([duel.Issue(**i) for i in record["ledger"]["issues"]])
 
 
 def _duel_record(d):
@@ -1189,36 +1266,39 @@ def _duel_record(d):
     return d.record
 
 
-def _save_duel_record(d, state):
+def _save_duel_record(d, state, host=None):
     """Write (the first time) or rewrite the record; a failure warns once and the duel goes on."""
+    host = host or _duel_host()
     record = _duel_record(d)
     try:
         if d.record_path is None:
-            directory = Path(_conversations_dir(state)).expanduser() / "duels"
+            directory = Path(host.conversations_dir(state)).expanduser() / "duels"
             d.record_path = duel.write_record(directory, record, d.started)
         else:
             duel.rewrite_record(d.record_path, record)
     except OSError as exc:
         if not d.record_warned:
-            display_error(f"Could not write the duel record: {exc}")
+            host.display_error(f"Could not write the duel record: {exc}")
             d.record_warned = True
 
 
-def _show_text(title, text):
-    console.print(f"[bold]{escape(title)}[/bold]")
-    console.print(text, markup=False, highlight=False)
+def _show_text(title, text, host=None):
+    host = host or _duel_host()
+    host.console.print(f"[bold]{escape(title)}[/bold]")
+    host.console.print(text, markup=False, highlight=False)
 
 
-def _duel_pause(d, after):
+def _duel_pause(d, after, host=None):
     """The duel> prompt between two phases. Returns "stop" or None (continue)."""
+    host = host or _duel_host()
     step = duel.next_phase(after, d.ledger)
     if step is not None:
-        display_info(f"Next: {step[0].value}. Enter to continue, ? for help.")
+        host.display_info(f"Next: {step[0].value}. Enter to continue, ? for help.")
     while True:
         try:
             line = input("duel> ").strip()
         except (EOFError, KeyboardInterrupt):
-            console.print()
+            host.console.print()
             return "stop"
         low = line.lower()
         if not line:
@@ -1230,38 +1310,40 @@ def _duel_pause(d, after):
             try:
                 d.ledger.add_steer(steer.group(1).lower(), steer.group(2).strip())
             except duel.Refused as exc:
-                display_error(str(exc))
+                host.display_error(str(exc))
             else:
                 target = (
                     "both sides" if steer.group(1).lower() == "both" else f"Side {steer.group(1).upper()}"
                 )
-                display_info(f"Queued for {target}'s revision.")
+                host.display_info(f"Queued for {target}'s revision.")
         elif override:
             try:
                 (d.ledger.override_accept if override.group(1) == "accept" else d.ledger.override_drop)(
                     int(override.group(2))
                 )
             except duel.Refused as exc:
-                display_error(str(exc))
+                host.display_error(str(exc))
             else:
-                display_info(
+                host.display_info(
                     f"Issue {override.group(2)} {'accepted' if override.group(1) == 'accept' else 'dropped'}."
                 )
         elif low == "ledger":
-            display_ledger(d.ledger.issues)
+            host.display_ledger(d.ledger.issues)
         elif show:
             side = show.group(1)
-            _show_text(f"Side {side.upper()} ({d.kinds.get(side, 'no text yet')})", d.texts.get(side, ""))
+            _show_text(
+                f"Side {side.upper()} ({d.kinds.get(side, 'no text yet')})", d.texts.get(side, ""), host=host
+            )
         elif low == "auto":
             d.auto = True
-            display_info("No more pauses until the final choice.")
+            host.display_info("No more pauses until the final choice.")
             return None
         elif low == "stop":
             return "stop"
         elif low == "?":
-            console.print(_DUEL_PAUSE_HELP, markup=False, highlight=False)
+            host.console.print(_DUEL_PAUSE_HELP, markup=False, highlight=False)
         else:
-            display_error("Unknown command. ? for help.")
+            host.display_error("Unknown command. ? for help.")
 
 
 def _duel_jobs(d, phase, who, state):
@@ -1285,16 +1367,18 @@ def _duel_jobs(d, phase, who, state):
     return jobs
 
 
-def _announce_phase(d, phase, who):
+def _announce_phase(d, phase, who, host=None):
+    host = host or _duel_host()
     d.number += 1
     who_note = ""
     if len(who) == 1 and who[0] in duel.SIDES:
         who_note = f" ({duel.side_label(who[0])})"
-    console.print(f"[info]Phase {d.number} · {phase.value}{who_note}[/info]")
+    host.console.print(f"[info]Phase {d.number} · {phase.value}{who_note}[/info]")
 
 
-def _apply_phase(d, phase, result, state):
+def _apply_phase(d, phase, result, state, host=None):
     """Fold a finished phase into the ledger and texts."""
+    host = host or _duel_host()
     for side, turn in result.turns.items():
         if phase == Phase.DRAFT:
             d.texts[side], d.kinds[side], d.models[side] = turn.answer, "draft", turn.model
@@ -1302,7 +1386,7 @@ def _apply_phase(d, phase, result, state):
         elif phase == Phase.CROSS:
             raised = duel.apply_cross(d.ledger, side, turn.answer, state.duel["axes"])
             word = "issue" if len(raised) == 1 else "issues"
-            display_info(f"{duel.side_label(side)} raised {len(raised) or 'no'} {word}.")
+            host.display_info(f"{duel.side_label(side)} raised {len(raised) or 'no'} {word}.")
         elif phase == Phase.DEFEND:
             duel.apply_defend(d.ledger, side, turn.answer)
         elif phase == Phase.REPLY:
@@ -1312,15 +1396,16 @@ def _apply_phase(d, phase, result, state):
             d.kinds[side], d.models[side] = "revised", turn.model
 
 
-def _run_judge(d, client, state):
+def _run_judge(d, client, state, host=None):
     """JUDGE on a fresh neutral conversation. Returns the _PhaseResult."""
+    host = host or _duel_host()
     order = duel.judge_order(_duel_rng)
     conversation = duel.new_conversation(duel.JUDGE_SYSTEM)
     text = duel.judge_prompt(d.brief, [d.texts[s] for s in order])
     d.number += 1
-    console.print(f"[info]Phase {d.number} · judge[/info]")
+    host.console.print(f"[info]Phase {d.number} · judge[/info]")
     job = _Job(duel.JUDGE, conversation, text, _DUEL_SLOTS[duel.JUDGE], dict(state.options))
-    result = _run_phase(Phase.JUDGE, [job], client, state, d.held)
+    result = _run_phase(Phase.JUDGE, [job], client, state, d.held, host=host)
     entry = {"n": d.number, "phase": "JUDGE", "ok": result.ok, "cause": result.cause}
     d.phases.append(entry)
     if result.ok:
@@ -1334,14 +1419,15 @@ def _run_judge(d, client, state):
     return result
 
 
-def _run_merge(d, base, client, state):
+def _run_merge(d, base, client, state, host=None):
     """MERGE with `base` as the base side. Returns (strengths, text) or None (message shown)."""
+    host = host or _duel_host()
     conversation = duel.new_conversation(duel.JUDGE_SYSTEM)
     text = duel.merge_prompt(d.brief, d.texts[base], d.texts[duel.other(base)])
     d.number += 1
-    console.print(f"[info]Phase {d.number} · merge (base {duel.side_label(base)})[/info]")
+    host.console.print(f"[info]Phase {d.number} · merge (base {duel.side_label(base)})[/info]")
     job = _Job(duel.JUDGE, conversation, text, _DUEL_SLOTS[duel.JUDGE], dict(state.options))
-    result = _run_phase(Phase.MERGE, [job], client, state, d.held)
+    result = _run_phase(Phase.MERGE, [job], client, state, d.held, host=host)
     entry = {"n": d.number, "phase": "MERGE", "ok": result.ok, "cause": result.cause}
     d.phases.append(entry)
     if not result.ok:
@@ -1350,25 +1436,27 @@ def _run_merge(d, base, client, state):
     parsed = duel.parse_merge(turn.answer)
     if parsed is None:
         entry.update(ok=False, cause="format")
-        display_error(f"The merge reply had no {duel.REWRITE_MARK} line, so it was discarded.")
+        host.display_error(f"The merge reply had no {duel.REWRITE_MARK} line, so it was discarded.")
         return None
     d.merges.append({"base": base, "strengths": parsed[0], "text": parsed[1]})
     return parsed[0], parsed[1], turn.model
 
 
-def _show_candidates(d):
+def _show_candidates(d, host=None):
+    host = host or _duel_host()
     for side in duel.SIDES:
-        _show_text(f"Side {side.upper()} ({d.kinds[side]})", d.texts[side])
+        _show_text(f"Side {side.upper()} ({d.kinds[side]})", d.texts[side], host=host)
 
 
-def _final_choice(d, client, state):
+def _final_choice(d, client, state, host=None):
     """The final-choice menu. Returns (text, model, choice) or None when the user discards."""
+    host = host or _duel_host()
     merged = None  # (base, text, model)
     if d.judge is not None:
-        console.print(f"[bold]Judge ({duel.order_note(tuple(d.judge['order']))}):[/bold]")
-        console.print(d.judge["reasons"], markup=False, highlight=False)
+        host.console.print(f"[bold]Judge ({duel.order_note(tuple(d.judge['order']))}):[/bold]")
+        host.console.print(d.judge["reasons"], markup=False, highlight=False)
         side = d.judge["recommendation"]
-        display_info(
+        host.display_info(
             f"Recommendation: {duel.side_label(side)}." if side else "The judge made no recommendation."
         )
     while True:
@@ -1380,7 +1468,7 @@ def _final_choice(d, client, state):
         try:
             line = input(f"Use which? [{' / '.join(options)}]> ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            console.print()
+            host.console.print()
             return None
         word, _, rest = line.partition(" ")
         rest = rest.strip()
@@ -1391,18 +1479,18 @@ def _final_choice(d, client, state):
         if word == "q":
             return None
         if word == "s":
-            _show_candidates(d)
+            _show_candidates(d, host=host)
             if merged:
-                _show_text(f"Merged (base {duel.side_label(merged[0])})", merged[1])
+                _show_text(f"Merged (base {duel.side_label(merged[0])})", merged[1], host=host)
         elif word == "j":
             if d.judge and d.judge["recommendation"]:
-                display_info("The judge has already recommended a side.")
+                host.display_info("The judge has already recommended a side.")
                 continue
-            result = _run_judge(d, client, state)
-            _save_duel_record(d, state)
+            result = _run_judge(d, client, state, host=host)
+            _save_duel_record(d, state, host=host)
             if result.ok and d.judge:
                 side = d.judge["recommendation"]
-                display_info(
+                host.display_info(
                     f"Recommendation: {duel.side_label(side)} ({duel.order_note(tuple(d.judge['order']))})."
                     if side
                     else "The judge made no recommendation."
@@ -1410,44 +1498,45 @@ def _final_choice(d, client, state):
         elif word == "m":
             base = rest if rest in duel.SIDES else None
             if rest and base is None:
-                display_error("Usage: m [a|b]")
+                host.display_error("Usage: m [a|b]")
                 continue
             if base is None and d.judge:
                 base = d.judge["recommendation"]
             if base is None:
-                display_error("There is no recommendation to take the base from. Use m a or m b.")
+                host.display_error("There is no recommendation to take the base from. Use m a or m b.")
                 continue
-            outcome = _run_merge(d, base, client, state)
-            _save_duel_record(d, state)
+            outcome = _run_merge(d, base, client, state, host=host)
+            _save_duel_record(d, state, host=host)
             if outcome:
                 merged = (base, outcome[1], outcome[2])
-                _show_text(f"Merged text (base {duel.side_label(base)}); c uses it", outcome[1])
+                _show_text(f"Merged text (base {duel.side_label(base)}); c uses it", outcome[1], host=host)
         else:
-            display_error("Choose one of: " + ", ".join(options))
+            host.display_error("Choose one of: " + ", ".join(options))
 
 
-def _start_duel(brief_text, auto, client, conversation, state):
+def _start_duel(brief_text, auto, client, conversation, state, host=None):
     """Check the server and build the duel; None (with the reason shown) when it cannot start."""
+    host = host or _duel_host()
     client.refresh()
     if client.server_slots is None:
-        display_error("Could not read the slot count from llama-server.")
+        host.display_error("Could not read the slot count from llama-server.")
         return None
     if client.server_slots < 2:
-        display_error("Duel needs two slots. Start llama-server with --parallel 2.")
+        host.display_error("Duel needs two slots. Start llama-server with --parallel 2.")
         return None
     if brief_text == '"""':
-        brief_text = get_multiline_input()
+        brief_text = host.get_multiline_input()
         if brief_text is None:
-            console.print()
+            host.console.print()
             return None
     if not brief_text.strip():
         return None
-    prepared = _prepare_user_message(brief_text)
+    prepared = host.prepare_user_message(brief_text)
     if prepared is None:
         return None
     brief, includes = prepared
-    with echo_suppressed():
-        _sync_notes(conversation, state, client)
+    with host.echo_suppressed():
+        host.sync_notes(conversation, state, client)
     setting = state.duel
     d = _Duel(brief=brief, includes=includes, started=datetime.now(), auto=auto or setting["auto"])
     for side in duel.SIDES:
@@ -1459,47 +1548,50 @@ def _start_duel(brief_text, auto, client, conversation, state):
     return d
 
 
-def _show_header(d, client, state):
+def _show_header(d, client, state, host=None):
+    host = host or _duel_host()
     n_ctx = f"{client.server_n_ctx:,}" if client.server_n_ctx else "unknown"
-    display_info(
+    host.display_info(
         f"Duel on {client.server_slots} slots (side A on slot 0, side B on slot 1); context {n_ctx} tokens, "
         f"assumed {d.settings['context']} between the sides."
     )
     for side in duel.SIDES:
         extra = [f"{k} {d.options[side][k]}" for k in ("temperature", "seed") if k in d.options[side]]
         suffix = f" ({', '.join(extra)})" if extra else ""
-        display_info(f"Side {side.upper()}{suffix}: {escape(d.settings[f'stance_{side}'])}")
+        host.display_info(f"Side {side.upper()}{suffix}: {escape(d.settings[f'stance_{side}'])}")
 
 
-def _handle_duel(args, client, conversation, state):
+def _handle_duel(args, client, conversation, state, host=None):
     """/duel: two slots write the same story and challenge each other (docs/duel.md)."""
+    host = host or _duel_host()
     cmd = duel.parse_args(args)
     if cmd.kind == "usage":
-        _duel_usage(client, state)
+        _duel_usage(client, state, host=host)
     elif cmd.kind == "error":
-        display_error(cmd.error)
+        host.display_error(cmd.error)
     elif cmd.kind == "ledger":
-        _duel_ledger(state)
+        _duel_ledger(state, host=host)
     elif cmd.kind == "set":
-        _duel_set(cmd.key, cmd.value, state)
+        _duel_set(cmd.key, cmd.value, state, host=host)
     else:
-        _run_duel(cmd, client, conversation, state)
+        _run_duel(cmd, client, conversation, state, host=host)
 
 
-def _run_duel(cmd, client, conversation, state):
-    d = _start_duel(cmd.brief, cmd.auto, client, conversation, state)
+def _run_duel(cmd, client, conversation, state, host=None):
+    host = host or _duel_host()
+    d = _start_duel(cmd.brief, cmd.auto, client, conversation, state, host=host)
     if d is None:
         return
-    _show_header(d, client, state)
+    _show_header(d, client, state, host=host)
     state.duel_last = _duel_record(d)
-    _save_duel_record(d, state)
+    _save_duel_record(d, state, host=host)
 
     after = None
     d.ended = "normal"
     while True:
         # Pauses sit between phases only, so not after the last one.
         if after is not None and not d.auto and duel.next_phase(after, d.ledger) is not None:
-            if _duel_pause(d, after) == "stop":
+            if _duel_pause(d, after, host=host) == "stop":
                 d.ended = "stopped"
                 break
         step = duel.next_phase(after, d.ledger)
@@ -1507,46 +1599,48 @@ def _run_duel(cmd, client, conversation, state):
             break
         phase, who, skipped = step
         if skipped:
-            display_info(duel.skip_note(skipped))
+            host.display_info(duel.skip_note(skipped))
             if Phase.REVISE in skipped:
                 d.ledger.close()
         if phase == Phase.JUDGE:
-            result = _run_judge(d, client, state)
+            result = _run_judge(d, client, state, host=host)
         else:
-            _announce_phase(d, phase, who)
-            result = _run_phase(phase, _duel_jobs(d, phase, who, state), client, state, d.held)
+            _announce_phase(d, phase, who, host=host)
+            result = _run_phase(phase, _duel_jobs(d, phase, who, state), client, state, d.held, host=host)
             d.phases.append({"n": d.number, "phase": phase.name, "ok": result.ok, "cause": result.cause})
             if result.ok:
-                _apply_phase(d, phase, result, state)
+                _apply_phase(d, phase, result, state, host=host)
                 if phase == Phase.REVISE:
                     d.ledger.close()
         if not result.ok:
             d.ended = f"abnormal:{phase.name}:{result.cause}"
             if phase == Phase.DRAFT:
-                display_error("The drafts could not be completed, so the duel ends and nothing is added.")
+                host.display_error(
+                    "The drafts could not be completed, so the duel ends and nothing is added."
+                )
             else:
-                display_info("This phase was discarded; the duel goes no further.")
+                host.display_info("This phase was discarded; the duel goes no further.")
             break
         after = phase
-        _save_duel_record(d, state)
+        _save_duel_record(d, state, host=host)
 
     if len(d.texts) < 2:
         d.choice = "none"
-        _save_duel_record(d, state)
+        _save_duel_record(d, state, host=host)
         return
-    _save_duel_record(d, state)
-    chosen = _final_choice(d, client, state)
+    _save_duel_record(d, state, host=host)
+    chosen = _final_choice(d, client, state, host=host)
     d.choice = chosen[2] if chosen else "none"
-    _save_duel_record(d, state)
+    _save_duel_record(d, state, host=host)
     if chosen is None:
-        display_info("Discarded; nothing was added to the conversation.")
+        host.display_info("Discarded; nothing was added to the conversation.")
         return
     text, model, _ = chosen
     conversation.add_user(d.brief, includes=d.includes)
     conversation.add_assistant(text, model=model or state.model)
-    with echo_suppressed():
-        _auto_save(conversation, state)
-    display_info("Added to the conversation.")
+    with host.echo_suppressed():
+        host.auto_save(conversation, state)
+    host.display_info("Added to the conversation.")
 
 
 def _handle_help(args, client, conversation, state):
