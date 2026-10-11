@@ -4,6 +4,7 @@ Loads settings from ~/.config/chat/config.toml (TOML format).
 CLI arguments override config file values.
 """
 
+import difflib
 from pathlib import Path
 
 import tomllib
@@ -51,20 +52,47 @@ DEFAULTS = {
 }
 
 
-def load_config():
-    """Load config from TOML file, merged with defaults.
+def normalize_key(key):
+    """`key` as a config key is spelled: lower case, '-' as '_'."""
+    return key.lower().replace("-", "_")
 
-    Returns a dict with all config keys guaranteed present.
-    Missing file or keys silently fall back to defaults.
-    """
+
+def suggest_key(key, candidates):
+    """The candidate closest to `key` (a hyphen or case slip is an exact match), or None."""
+    close = difflib.get_close_matches(normalize_key(key), candidates, n=1)
+    return close[0] if close else None
+
+
+def unknown_keys(file_config):
+    """[(key, suggestion or None)] for each key of a parsed config file that is not in DEFAULTS."""
+    return [(key, suggest_key(key, DEFAULTS)) for key in file_config if key not in DEFAULTS]
+
+
+def load_config_checked():
+    """(config, problems): the config as load_config() returns it, and one printable line per
+    unknown key in the file (which is otherwise ignored)."""
     config = dict(DEFAULTS)
+    problems = []
 
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "rb") as f:
             file_config = tomllib.load(f)
         config.update({k: file_config[k] for k in DEFAULTS if k in file_config})
+        for key, suggestion in unknown_keys(file_config):
+            hint = f'; did you mean "{suggestion}"?' if suggestion else "."
+            problems.append(f'{CONFIG_FILE.name}: unknown key "{key}" is ignored{hint}')
 
-    return config
+    return config, problems
+
+
+def load_config():
+    """Load config from TOML file, merged with defaults.
+
+    Returns a dict with all config keys guaranteed present.
+    Missing file or keys silently fall back to defaults; load_config_checked() also
+    reports the unknown ones.
+    """
+    return load_config_checked()[0]
 
 
 def apply_project(config, settings):

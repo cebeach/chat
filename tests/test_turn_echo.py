@@ -69,6 +69,7 @@ class Session:
 
     def __init__(self):
         self.log, self.infos, self.errors, self.conversation, self.client = [], [], [], None, None
+        self.warnings = []
         self.chat_calls = []
 
 
@@ -160,7 +161,7 @@ def run_session(
     make_conversation.list_saved = real_conversation.list_saved
 
     with (
-        mock.patch.object(chat, "load_config", return_value=config),
+        mock.patch.object(chat, "load_config_checked", return_value=(config, [])),
         mock.patch.object(chat, "LlamaClient", return_value=client),
         mock.patch.object(sys, "argv", ["chat.py", *argv]),
         mock.patch("builtins.input", fake_input),
@@ -175,6 +176,7 @@ def run_session(
         ),
         mock.patch.object(chat, "_auto_save", logged("auto_save", chat._auto_save)),
         mock.patch.object(chat, "display_error", display_error),
+        mock.patch.object(chat, "display_warning", session.warnings.append),
         mock.patch.object(chat, "Conversation", make_conversation),
         mock.patch.object(chat, "display_info", display_info),
         mock.patch.object(chat.console, "print", logged("print", real_print)),

@@ -59,6 +59,43 @@ class TestSettings:
         (tmp_path / "project.toml").write_text('system_prompt = "hi"\ntop_p = 0.9\n')
         assert projects.load_settings(tmp_path) == ({"top_p": 0.9}, ["system_prompt"])
 
+    def checked(self, tmp_path, text):
+        (tmp_path / "project.toml").write_text(text)
+        return projects.load_settings_checked(tmp_path)
+
+    def test_a_typo_is_reported_with_its_suggestion(self, tmp_path):
+        assert self.checked(tmp_path, "temprature = 0.2\n") == (
+            {},
+            [],
+            ['project.toml: unknown key "temprature" is ignored; did you mean "temperature"?'],
+        )
+
+    def test_a_hyphen_slip_on_an_allowed_key_is_reported(self, tmp_path):
+        _, _, unknown = self.checked(tmp_path, "top-p = 0.9\n")
+        assert unknown == ['project.toml: unknown key "top-p" is ignored; did you mean "top_p"?']
+
+    def test_a_global_key_is_reported_as_global(self, tmp_path):
+        _, _, unknown = self.checked(tmp_path, 'llama_url = "x"\n')
+        assert len(unknown) == 1
+        assert unknown[0].startswith("project.toml: llama_url is a global setting")
+        assert "did you mean" not in unknown[0]
+        assert "seed, temperature" in unknown[0]
+
+    def test_a_key_with_no_close_match_has_no_suggestion(self, tmp_path):
+        _, _, unknown = self.checked(tmp_path, "zzqx = 1\n")
+        assert unknown == ['project.toml: unknown key "zzqx" is ignored.']
+
+    def test_system_prompt_is_reported_once(self, tmp_path):
+        assert self.checked(tmp_path, 'system_prompt = "hi"\n') == ({}, ["system_prompt"], [])
+
+    def test_allowed_keys_and_a_missing_file_report_nothing(self, tmp_path):
+        assert self.checked(tmp_path, "seed = 1\n")[2] == []
+        assert projects.load_settings_checked(tmp_path / "none") == ({}, [], [])
+
+    def test_load_settings_is_the_first_two_of_the_checked_form(self, tmp_path):
+        text = 'top_p = 0.9\nsystem_prompt = "hi"\nzzqx = 1\n'
+        assert self.checked(tmp_path, text)[:2] == projects.load_settings(tmp_path)
+
     def test_a_malformed_file_names_itself(self, tmp_path):
         (tmp_path / "project.toml").write_text("temperature = = 1")
         with pytest.raises(ValueError, match="project.toml"):
