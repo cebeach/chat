@@ -157,3 +157,31 @@ def test_display_warning_prints_the_text():
     with ui.console.capture() as cap:
         ui.display_warning("config.toml: unknown key [x]")
     assert "config.toml: unknown key" in re.sub(r"\x1b\[[0-9;]*m", "", cap.get())
+
+
+class TestPureValidation:
+    """option_overrides and duel_settings report in a list; they never print."""
+
+    def test_option_overrides_returns_the_problem_lines(self, capsys):
+        options, problems = config.option_overrides({**DEFAULTS, "temperature": "hot", "top_p": 0.9})
+        assert options == {"top_p": 0.9}
+        assert problems == ["config.toml: temperature must be float; ignored."]
+        assert capsys.readouterr().out == ""
+
+    def test_option_overrides_names_the_source(self):
+        _, problems = config.option_overrides({"min_p": 5}, source="project.toml")
+        assert len(problems) == 1 and problems[0].startswith("project.toml: min_p must be")
+
+    def test_duel_settings_falls_back_and_reports(self, capsys):
+        settings, problems = config.duel_settings({**DEFAULTS, "duel_context": "x", "duel_axes": []})
+        assert settings["context"] == "shared" and settings["auto"] is False
+        assert [p.split(" ")[1] for p in problems] == ["duel_axes", "duel_context"]
+        assert capsys.readouterr().out == ""
+
+    def test_a_clean_config_has_no_problems(self):
+        assert config.duel_settings(DEFAULTS)[1] == []
+        assert config.option_overrides(DEFAULTS)[1] == []
+
+    def test_chat_keeps_the_names_the_host_reaches(self):
+        assert chat._validated is config.validated
+        assert chat._OPTION_KEYS is config.OPTION_KEYS
