@@ -12,32 +12,14 @@ from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
+import commands
 from conversation import Conversation
 from projects import list_projects
 
 HISTORY_FILE = Path.home() / ".local" / "share" / "chat" / "history"
 HISTORY_MAX = 1000
 
-COMMANDS = [
-    "/read",
-    "/?",
-    "/cat",
-    "/clear",
-    "/config",
-    "/conversations",
-    "/duel",
-    "/exit",
-    "/info",
-    "/load",
-    "/project",
-    "/recall",
-    "/remember",
-    "/retry",
-    "/save",
-    "/set",
-    "/stats",
-    "/system",
-]
+COMMANDS = commands.names()
 
 theme = Theme(
     {
@@ -58,7 +40,7 @@ def print_welcome(model, project=None):
     console.print(f"Model: [bold]{model}[/bold]")
     if project:
         console.print(f"Project: [bold]{escape(project)}[/bold]")
-    console.print("Type [bold]/?[/bold] for commands, [bold]/exit[/bold] to quit.")
+    console.print("Type [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit.")
     console.print()
 
 
@@ -66,38 +48,9 @@ def print_help():
     table = Table(title="Commands", show_header=True, header_style="bold")
     table.add_column("Command", style="bold cyan")
     table.add_column("Description")
-    table.add_row("/cat <name>", "Print a saved conversation to the console")
-    table.add_row("/clear", "Clear conversation history")
-    table.add_row(
-        "/config",
-        "Show configuration; '/config save_thinking on|off' controls whether <think> blocks are saved (omit on/off to toggle)",
-    )
-    table.add_row("/conversations", "List saved conversations")
-    table.add_row(
-        "/duel [--auto] <brief>",
-        "Two slots write the same story and challenge each other (/duel for usage; needs --parallel 2)",
-    )
-    table.add_row("/exit", "Quit the application")
-    table.add_row("/help", "Show this help message")
-    table.add_row("/info", "Show conversation and context window statistics")
-    table.add_row("/load <name>", "Load a saved conversation")
-    table.add_row(
-        "/project", "Show the active project (/project list | new <name> | use <name> | reload | leave)"
-    )
-    table.add_row("/read <path>", "Read a text file into the conversation")
-    table.add_row("/recall <n>", "Recall message pair n into context")
-    table.add_row(
-        "/remember <text>", "Merge a note into the project's project.md (shown as a diff for approval)"
-    )
-    table.add_row("/retry", "Regenerate the last response")
-    table.add_row("/save <name>", "Save conversation (default: timestamp)")
-    table.add_row("/set", "Show model options and this session's overrides of the server's values")
-    table.add_row("/set <key> <val>", "Set a model option (or 'default' to reset)")
-    table.add_row("/stats", "Toggle token and context stats display")
-    table.add_row(
-        "/system <prompt>",
-        'Set the system prompt (use """ for multiline or a path to a file within the current directory)',
-    )
+    for command in commands.COMMANDS:
+        for usage, description in command.rows:
+            table.add_row(usage, description)
     table.add_row('"""', "Enter multiline input mode (or use Shift+Enter / Alt+Enter / paste)")
     console.print(table)
 
@@ -563,6 +516,37 @@ def display_stats(stats, n_ctx=None):
         console.print(f"[dim]  {' | '.join(parts)}[/dim]")
 
 
+def _candidates(kind, text, conversations_dir, projects_dir):
+    """Names of the given completion kind that start with text."""
+    if kind == "conversation" and conversations_dir:
+        names = [n for n, _ in Conversation.list_saved(conversations_dir())]
+    elif kind == "project" and projects_dir:
+        names = list_projects(projects_dir())
+    else:
+        names = []
+    return [n for n in names if n.startswith(text)]
+
+
+def _completions(line, text, conversations_dir, projects_dir):
+    """Candidates for text, the word being completed at the end of line."""
+    first, space, rest = line.partition(" ")
+    command = commands.lookup(first.lower()) if space else None
+    if command is not None:
+        complete = command.complete
+        if isinstance(complete, commands.Subcommands):
+            sub, sub_space, _ = rest.partition(" ")
+            if not sub_space:
+                return [c for c in complete.names if c.startswith(text)]
+            kind = dict(complete.arguments).get(sub)
+            return _candidates(kind, text, conversations_dir, projects_dir) if kind else []
+        if complete:
+            return _candidates(complete, text, conversations_dir, projects_dir)
+        return []
+    if text.startswith("/"):
+        return [c for c in COMMANDS if c.startswith(text)]
+    return []
+
+
 def init_readline(conversations_dir, projects_dir=None):
     """Load readline history from disk and configure tab-completion.
 
@@ -572,18 +556,7 @@ def init_readline(conversations_dir, projects_dir=None):
 
     def completer(text, state):
         line = readline.get_line_buffer().lstrip()
-        if (line.startswith("/load ") or line.startswith("/cat ")) and conversations_dir:
-            names = [n for n, _ in Conversation.list_saved(conversations_dir())]
-            matches = [n for n in names if n.startswith(text)]
-        elif line.startswith(("/project use ", "/project new ")) and projects_dir:
-            matches = [n for n in list_projects(projects_dir()) if n.startswith(text)]
-        elif line.startswith("/project ") and " " not in line[len("/project ") :]:
-            subs = ["info", "list", "new", "use", "reload", "leave"]
-            matches = [c for c in subs if c.startswith(text)]
-        elif text.startswith("/"):
-            matches = [c for c in COMMANDS if c.startswith(text)]
-        else:
-            matches = []
+        matches = _completions(line, text, conversations_dir, projects_dir)
         return matches[state] if state < len(matches) else None
 
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)

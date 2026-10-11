@@ -18,6 +18,7 @@ from datetime import datetime
 from requests.exceptions import ConnectionError, HTTPError, RequestException
 from rich.markup import escape
 
+import commands
 import duel
 import projects
 import server_log
@@ -1884,48 +1885,25 @@ def _handle_info(args, client, conversation, state):
     return True
 
 
-def handle_command(cmd, args, client, conversation, state):
-    """Handle a slash command. Returns True if the REPL should continue."""
-    if cmd == "/?":
-        return _handle_help(args, client, conversation, state)
-    elif cmd == "/exit":
-        return _handle_exit(args, client, conversation, state)
-    elif cmd == "/clear":
-        return _handle_clear(args, client, conversation, state)
-    elif cmd == "/system":
-        return _handle_system(args, client, conversation, state)
-    elif cmd == "/save":
-        return _handle_save(args, client, conversation, state)
-    elif cmd == "/load":
-        return _handle_load(args, client, conversation, state)
-    elif cmd == "/cat":
-        return _handle_cat(args, client, conversation, state)
-    elif cmd == "/recall":
-        return _handle_recall(args, client, conversation, state)
-    elif cmd == "/conversations":
-        return _handle_conversations(args, client, conversation, state)
-    elif cmd == "/stats":
-        return _handle_stats(args, client, conversation, state)
-    elif cmd == "/set":
-        _handle_set(args, state, client)
-    elif cmd == "/duel":
-        _handle_duel(args, client, conversation, state)
-    elif cmd == "/retry":
-        return _handle_retry(args, client, conversation, state)
-    elif cmd == "/read":
-        return _handle_read(args, client, conversation, state)
-    elif cmd == "/config":
-        _handle_config(args, state, client)
-    elif cmd == "/project":
-        _handle_project(args, client, conversation, state)
-    elif cmd == "/remember":
-        _handle_remember(args, client, conversation, state)
-    elif cmd == "/info":
-        return _handle_info(args, client, conversation, state)
-    else:
-        display_error(f"Unknown command: {cmd}. Type /? for available commands.")
+def _cmd_set(args, client, conversation, state):
+    _handle_set(args, state, client)
 
-    return True
+
+def _cmd_config(args, client, conversation, state):
+    _handle_config(args, state, client)
+
+
+def handle_command(cmd, args, client, conversation, state):
+    """Handle a slash command. Returns True if the REPL should continue.
+
+    The handler is looked up by name on every call, so a patched chat._handle_* takes effect.
+    Only a handler that returns False (/exit) stops the REPL.
+    """
+    command = commands.lookup(cmd)
+    if command is None:
+        display_error(f"Unknown command: {cmd}. Type /help for available commands.")
+        return True
+    return globals()[command.handler_name](args, client, conversation, state) is not False
 
 
 def _auto_save(conversation, state, force=False):
@@ -2091,6 +2069,9 @@ def main():
     finally:
         _auto_save(conversation, state)
         save_readline_history()
+
+
+commands.check_handlers(globals())
 
 
 if __name__ == "__main__":
